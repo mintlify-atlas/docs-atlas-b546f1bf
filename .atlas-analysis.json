@@ -1,0 +1,128 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "VaultSaaS SDK",
+  "projectDescription": "Open-source TypeScript SDK for unified payment orchestration across multiple payment providers",
+  "theme": "aspen",
+  "primaryColor": "#6366f1",
+  "lightColor": "#818cf8",
+  "darkColor": "#4f46e5",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/routing",
+              "concepts/idempotency",
+              "concepts/error-handling",
+              "concepts/webhooks"
+            ]
+          },
+          {
+            "group": "Provider Adapters",
+            "pages": [
+              "providers/overview",
+              "providers/stripe",
+              "providers/dlocal",
+              "providers/paystack"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/platform-connector",
+              "advanced/custom-adapters",
+              "advanced/testing"
+            ]
+          },
+          {
+            "group": "Resources",
+            "pages": [
+              "resources/troubleshooting",
+              "resources/versioning",
+              "resources/security"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Client",
+            "pages": [
+              "api/vault-client",
+              "api/configuration"
+            ]
+          },
+          {
+            "group": "Payment Operations",
+            "pages": [
+              "api/charge",
+              "api/authorize",
+              "api/capture",
+              "api/refund",
+              "api/void",
+              "api/get-status"
+            ]
+          },
+          {
+            "group": "Types",
+            "pages": [
+              "api/types/payment-request",
+              "api/types/payment-result",
+              "api/types/payment-method",
+              "api/types/errors"
+            ]
+          },
+          {
+            "group": "Adapters",
+            "pages": [
+              "api/adapters/payment-adapter",
+              "api/adapters/stripe-adapter",
+              "api/adapters/dlocal-adapter",
+              "api/adapters/paystack-adapter"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multi-provider payment orchestration with unified API",
+    "Intelligent routing with local and platform-based rules",
+    "Built-in idempotency and webhook handling",
+    "Type-safe TypeScript SDK with comprehensive error handling",
+    "Support for Stripe, dLocal, and Paystack payment providers",
+    "Platform connector for advanced analytics and routing decisions"
+  ],
+  "publicApiSurface": [
+    "VaultClient",
+    "VaultClient.charge",
+    "VaultClient.authorize",
+    "VaultClient.capture",
+    "VaultClient.refund",
+    "VaultClient.void",
+    "VaultClient.getStatus",
+    "VaultClient.listPaymentMethods",
+    "VaultClient.handleWebhook",
+    "StripeAdapter",
+    "DLocalAdapter",
+    "PaystackAdapter",
+    "VaultError",
+    "VaultConfigError",
+    "VaultRoutingError",
+    "VaultIdempotencyConflictError"
+  ]
+}
