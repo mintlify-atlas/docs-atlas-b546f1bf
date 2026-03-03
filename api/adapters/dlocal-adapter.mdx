@@ -81,7 +81,7 @@ new DLocalAdapter(config: Record<string, unknown>)
 ## Configuration Example
 
 ```typescript
-import { DLocalAdapter } from '@vaultsaas/sdk';
+import { DLocalAdapter } from '@vaultsaas/core';
 
 const dlocal = new DLocalAdapter({
   xLogin: process.env.DLOCAL_X_LOGIN,
@@ -256,7 +256,7 @@ Payment results include dLocal-specific metadata:
 ### PIX Payment (Brazil)
 
 ```typescript
-import { DLocalAdapter } from '@vaultsaas/sdk';
+import { DLocalAdapter } from '@vaultsaas/core';
 
 const dlocal = new DLocalAdapter({
   xLogin: process.env.DLOCAL_X_LOGIN,

@@ -72,7 +72,7 @@ new StripeAdapter(config: Record<string, unknown>)
 ## Configuration Example
 
 ```typescript
-import { StripeAdapter } from '@vaultsaas/sdk';
+import { StripeAdapter } from '@vaultsaas/core';
 
 const stripe = new StripeAdapter({
   apiKey: process.env.STRIPE_SECRET_KEY,
@@ -214,7 +214,7 @@ Payment results include Stripe-specific metadata:
 ## Usage Example
 
 ```typescript
-import { StripeAdapter } from '@vaultsaas/sdk';
+import { StripeAdapter } from '@vaultsaas/core';
 
 const stripe = new StripeAdapter({
   apiKey: process.env.STRIPE_SECRET_KEY,

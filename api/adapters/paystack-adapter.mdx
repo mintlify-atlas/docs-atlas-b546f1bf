@@ -63,7 +63,7 @@ new PaystackAdapter(config: Record<string, unknown>)
 ## Configuration Example
 
 ```typescript
-import { PaystackAdapter } from '@vaultsaas/sdk';
+import { PaystackAdapter } from '@vaultsaas/core';
 
 const paystack = new PaystackAdapter({
   secretKey: process.env.PAYSTACK_SECRET_KEY,
@@ -252,7 +252,7 @@ The adapter automatically unwraps this and validates the `status` field.
 ### Card Payment (Nigeria)
 
 ```typescript
-import { PaystackAdapter } from '@vaultsaas/sdk';
+import { PaystackAdapter } from '@vaultsaas/core';
 
 const paystack = new PaystackAdapter({
   secretKey: process.env.PAYSTACK_SECRET_KEY,

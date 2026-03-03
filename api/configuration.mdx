@@ -252,12 +252,38 @@ interface IdempotencyRecord {
 }
 ```
 
-#### Example with Redis Store
+#### Example with Custom Redis Store
 
 ```typescript
-import { VaultClient } from '@vaultsaas/core';
-import { RedisIdempotencyStore } from '@vaultsaas/redis';
+import { VaultClient, type IdempotencyStore, type IdempotencyRecord } from '@vaultsaas/core';
 import Redis from 'ioredis';
+
+// Custom Redis implementation of IdempotencyStore
+class RedisIdempotencyStore implements IdempotencyStore {
+  constructor(private redis: Redis) {}
+
+  async get(key: string): Promise<IdempotencyRecord | null> {
+    const data = await this.redis.get(`idempotency:${key}`);
+    return data ? JSON.parse(data) : null;
+  }
+
+  async set(record: IdempotencyRecord): Promise<void> {
+    const ttl = Math.max(0, record.expiresAt - Date.now());
+    await this.redis.setex(
+      `idempotency:${record.key}`,
+      Math.ceil(ttl / 1000),
+      JSON.stringify(record)
+    );
+  }
+
+  async delete(key: string): Promise<void> {
+    await this.redis.del(`idempotency:${key}`);
+  }
+
+  async clearExpired(): Promise<void> {
+    // Redis TTL handles expiration automatically
+  }
+}
 
 const redis = new Redis({
   host: 'localhost',
@@ -466,13 +492,10 @@ import {
   VaultClient, 
   StripeAdapter, 
   DLocalAdapter, 
-  PaystackAdapter 
+  PaystackAdapter,
+  MemoryIdempotencyStore
 } from '@vaultsaas/core';
-import { RedisIdempotencyStore } from '@vaultsaas/redis';
-import Redis from 'ioredis';
 import winston from 'winston';
-
-const redis = new Redis();
 
 const logger = winston.createLogger({
   level: 'info',
@@ -535,9 +558,9 @@ const client = new VaultClient({
     ],
   },
 
-  // Idempotency with Redis
+  // Idempotency (use custom Redis store in production - see above example)
   idempotency: {
-    store: new RedisIdempotencyStore(redis),
+    store: new MemoryIdempotencyStore(),
     ttlMs: 86400000, // 24 hours
   },
 
