@@ -1,0 +1,266 @@
+---
+title: 'capture()'
+description: 'Capture funds from a previously authorized transaction'
+icon: 'money-bill-transfer'
+---
+
+Capture funds from a previously authorized transaction. This completes a two-step payment flow started with `authorize()`. You can capture the full authorized amount or a partial amount.
+
+## Method signature
+
+```typescript
+async capture(request: CaptureRequest): Promise<PaymentResult>
+```
+
+## Parameters
+
+<ParamField path="body.transactionId" type="string" required>
+  The transaction ID returned from a prior `authorize()` call. This identifies which authorization to capture.
+</ParamField>
+
+<ParamField path="body.amount" type="number">
+  Partial capture amount in smallest currency unit. Omit this parameter to capture the full authorized amount.
+</ParamField>
+
+<ParamField path="body.idempotencyKey" type="string">
+  Unique key to prevent duplicate captures when retrying the same request.
+</ParamField>
+
+## Returns
+
+<ResponseField name="PaymentResult" type="object">
+  Normalized payment result with status `"completed"` for successful captures.
+  
+  <Expandable title="properties" defaultOpen>
+    <ResponseField name="id" type="string" required>
+      VaultSaaS-normalized transaction identifier for the capture.
+    </ResponseField>
+    
+    <ResponseField name="status" type="PaymentStatus" required>
+      Payment status. Will be `"completed"` for successful captures.
+    </ResponseField>
+    
+    <ResponseField name="provider" type="string" required>
+      Name of the provider that processed the capture (same as the original authorization).
+    </ResponseField>
+    
+    <ResponseField name="providerId" type="string" required>
+      Provider's own identifier for this capture transaction.
+    </ResponseField>
+    
+    <ResponseField name="amount" type="number" required>
+      Captured amount in smallest currency unit.
+    </ResponseField>
+    
+    <ResponseField name="currency" type="string" required>
+      ISO 4217 currency code.
+    </ResponseField>
+    
+    <ResponseField name="paymentMethod" type="object" required>
+      Snapshot of the payment method used in the original authorization.
+      
+      <Expandable title="properties">
+        <ResponseField name="type" type="string" required>
+          Payment method type.
+        </ResponseField>
+        
+        <ResponseField name="last4" type="string">
+          Last 4 digits of card or account number.
+        </ResponseField>
+        
+        <ResponseField name="brand" type="string">
+          Card brand (e.g., `"visa"`, `"mastercard"`).
+        </ResponseField>
+        
+        <ResponseField name="expiryMonth" type="number">
+          Card expiry month.
+        </ResponseField>
+        
+        <ResponseField name="expiryYear" type="number">
+          Card expiry year.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="customer" type="object">
+      Customer information from the original authorization.
+      
+      <Expandable title="properties">
+        <ResponseField name="id" type="string">
+          Provider's customer identifier.
+        </ResponseField>
+        
+        <ResponseField name="email" type="string">
+          Customer email address.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="metadata" type="object" required>
+      Metadata from the original authorization.
+    </ResponseField>
+    
+    <ResponseField name="routing" type="object" required>
+      Routing information from the transaction.
+      
+      <Expandable title="properties">
+        <ResponseField name="source" type="string" required>
+          Routing source: `"local"` (from transaction provider lookup).
+        </ResponseField>
+        
+        <ResponseField name="reason" type="string" required>
+          Will be `"transaction provider lookup"` for captures.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="string" required>
+      ISO 8601 timestamp when the capture was created.
+    </ResponseField>
+    
+    <ResponseField name="providerMetadata" type="object" required>
+      Raw provider-specific fields not mapped to the normalized schema.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Error handling
+
+The `capture()` method may throw the following errors:
+
+<AccordionGroup>
+  <Accordion title="VaultIdempotencyConflictError">
+    Thrown when an idempotency key is reused with different request data.
+  </Accordion>
+  
+  <Accordion title="VaultRoutingError">
+    Thrown when the provider for the original transaction cannot be found.
+    
+    ```typescript
+    // src/client/vault-client.ts:491-495
+    if (!fallbackProvider) {
+      throw new VaultRoutingError(
+        'No configured providers are available for transaction lookup.'
+      );
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Provider-specific errors">
+    The provider may return errors such as:
+    - Authorization not found
+    - Authorization already captured
+    - Authorization expired
+    - Capture amount exceeds authorized amount
+  </Accordion>
+</AccordionGroup>
+
+## Example
+
+<CodeGroup>
+
+```typescript Full capture
+// First, create an authorization
+const authorization = await client.authorize({
+  amount: 50000,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'tok_visa' },
+  idempotencyKey: 'auth-order-123'
+});
+
+// Later, capture the full amount
+const capture = await client.capture({
+  transactionId: authorization.id,
+  idempotencyKey: 'capture-order-123'
+});
+
+console.log(capture.status); // 'completed'
+console.log(capture.amount); // 50000
+```
+
+```typescript Partial capture
+// Authorize $500 for hotel stay
+const authorization = await client.authorize({
+  amount: 50000,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'tok_visa' },
+  description: 'Hotel reservation'
+});
+
+// Customer checked out early, only charge $300
+const capture = await client.capture({
+  transactionId: authorization.id,
+  amount: 30000, // Partial capture
+  idempotencyKey: 'capture-res-789'
+});
+
+console.log(capture.amount); // 30000
+// Remaining $200 is automatically released
+```
+
+```typescript Multiple partial captures
+// Some providers support multiple partial captures
+const authorization = await client.authorize({
+  amount: 100000, // $1000
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'tok_visa' }
+});
+
+// First capture
+const capture1 = await client.capture({
+  transactionId: authorization.id,
+  amount: 40000, // $400
+  idempotencyKey: 'capture-1'
+});
+
+// Second capture
+const capture2 = await client.capture({
+  transactionId: authorization.id,
+  amount: 30000, // $300
+  idempotencyKey: 'capture-2'
+});
+
+// Total captured: $700, remaining $300 still authorized
+```
+
+```typescript Error handling
+try {
+  const capture = await client.capture({
+    transactionId: 'txn_auth_xyz',
+    amount: 25000
+  });
+} catch (error) {
+  if (error.code === 'ROUTING_PROVIDER_UNAVAILABLE') {
+    console.error('Provider not found for transaction');
+  } else if (error.message.includes('expired')) {
+    console.error('Authorization has expired');
+  } else {
+    console.error('Capture failed:', error.message);
+  }
+}
+```
+
+</CodeGroup>
+
+## Implementation details
+
+The capture operation (`src/client/vault-client.ts:210-244`):
+
+1. Looks up the provider that handled the original authorization using the transaction index
+2. Falls back to the first configured provider if the transaction is not found in the index
+3. Executes the capture through the provider adapter
+4. Normalizes the provider response into a standard `PaymentResult` format
+5. Records the capture transaction in the provider index
+6. Queues transaction report to the platform for analytics
+
+<Info>
+  The capture uses the same provider that processed the original authorization. Provider selection is based on transaction lookup, not routing rules.
+</Info>
+
+<Warning>
+  Not all providers support partial captures or multiple captures. Check your provider's documentation for specific limitations.
+</Warning>
+
+<Tip>
+  Use partial captures to adjust the final charge based on actual usage, such as in hotel stays, car rentals, or pay-per-use services.
+</Tip>

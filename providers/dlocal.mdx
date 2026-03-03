@@ -1,0 +1,339 @@
+---
+title: dLocal Adapter
+description: Complete guide to integrating dLocal with VaultSaaS SDK for LATAM payments
+icon: building-columns
+---
+
+The dLocal adapter enables payment processing across Latin America with support for local payment methods including PIX, Boleto, and regional cards.
+
+## Configuration
+
+### Required Credentials
+
+- `xLogin`: dLocal login credential
+- `xTransKey`: dLocal transaction key
+- `secretKey`: dLocal secret key for API authentication
+
+### Basic Setup
+
+```typescript
+import { DLocalAdapter, VaultClient } from '@vaultsaas/core';
+
+const vault = new VaultClient({
+  providers: {
+    dlocal: {
+      adapter: DLocalAdapter,
+      config: {
+        xLogin: process.env.DLOCAL_X_LOGIN!,
+        xTransKey: process.env.DLOCAL_X_TRANS_KEY!,
+        secretKey: process.env.DLOCAL_SECRET_KEY!,
+        webhookSecret: process.env.DLOCAL_WEBHOOK_SECRET,
+        baseUrl: process.env.DLOCAL_BASE_URL,
+      },
+    },
+  },
+  routing: {
+    rules: [{ match: { default: true }, provider: 'dlocal' }],
+  },
+});
+```
+
+### Configuration Options
+
+```typescript
+config: {
+  xLogin: string;              // Required
+  xTransKey: string;           // Required
+  secretKey: string;           // Required
+  webhookSecret?: string;      // Optional, falls back to secretKey
+  baseUrl?: string;            // Optional, for sandbox environments
+  timeoutMs?: number;          // Request timeout (default: 15000ms)
+  fetchFn?: typeof fetch;      // Custom fetch implementation
+}
+```
+
+<Note>
+The `webhookSecret` parameter is optional. If not provided, the adapter falls back to using `secretKey` for webhook verification.
+</Note>
+
+## Supported Capabilities
+
+### Payment Methods
+
+- **Card**: Credit and debit cards
+- **PIX**: Brazilian instant payment system
+- **Boleto**: Brazilian payment voucher
+- **Bank Transfer**: Direct bank transfers
+
+### Currencies
+
+LATAM-focused currency support:
+
+`BRL`, `MXN`, `ARS`, `CLP`, `COP`, `PEN`, `UYU`, `BOB`, `PYG`, `CRC`, `GTQ`, `PAB`, `DOP`, `USD`
+
+### Countries
+
+LATAM regional coverage:
+
+`BR` (Brazil), `MX` (Mexico), `AR` (Argentina), `CL` (Chile), `CO` (Colombia), `PE` (Peru), `UY` (Uruguay), `BO` (Bolivia), `PY` (Paraguay), `CR` (Costa Rica), `GT` (Guatemala), `PA` (Panama), `DO` (Dominican Republic), `EC` (Ecuador), `SV` (El Salvador), `NI` (Nicaragua), `HN` (Honduras)
+
+## Usage Examples
+
+### PIX Payment (Brazil)
+
+```typescript
+const result = await vault.charge({
+  amount: 1500,
+  currency: 'BRL',
+  paymentMethod: {
+    type: 'pix',
+  },
+  customer: {
+    email: 'buyer@example.com',
+    address: {
+      line1: 'Avenida Paulista 1000',
+      city: 'Sao Paulo',
+      postalCode: '01310-100',
+      country: 'BR',
+    },
+  },
+  metadata: {
+    orderId: 'order_456',
+  },
+});
+
+console.log(result.id);
+console.log(result.status); // 'pending' or 'completed'
+```
+
+### Boleto Payment
+
+```typescript
+const boleto = await vault.charge({
+  amount: 5000,
+  currency: 'BRL',
+  paymentMethod: {
+    type: 'boleto',
+    customerDocument: '12345678900', // CPF number
+  },
+  customer: {
+    name: 'João Silva',
+    email: 'joao@example.com',
+    document: '12345678900',
+  },
+});
+
+console.log(boleto.id);
+```
+
+### Card Payment
+
+```typescript
+const cardPayment = await vault.charge({
+  amount: 2500,
+  currency: 'MXN',
+  paymentMethod: {
+    type: 'card',
+    token: 'card_token_123', // dLocal card token
+  },
+  customer: {
+    email: 'buyer@example.com',
+    address: {
+      country: 'MX',
+    },
+  },
+});
+```
+
+### Authorize & Capture
+
+```typescript
+// Step 1: Authorize
+const auth = await vault.authorize({
+  amount: 10000,
+  currency: 'BRL',
+  paymentMethod: {
+    type: 'card',
+    token: 'card_token_123',
+  },
+  customer: {
+    email: 'buyer@example.com',
+    address: { country: 'BR' },
+  },
+});
+
+console.log(auth.status); // 'authorized'
+
+// Step 2: Capture
+const captured = await vault.capture({
+  transactionId: auth.id,
+  amount: 10000, // Optional: partial capture
+});
+```
+
+### Refund
+
+```typescript
+const refund = await vault.refund({
+  transactionId: 'payment_id_123',
+  amount: 1000,
+  reason: 'Customer requested refund',
+});
+
+console.log(refund.status); // 'completed', 'pending', or 'failed'
+```
+
+## Webhooks
+
+### Signature Verification
+
+dLocal webhooks use HMAC-SHA256 signature verification to ensure authenticity.
+
+<Warning>
+**Important**: Pass the **raw request body** to prevent verification failure. Parsed JSON bodies will fail signature checks.
+</Warning>
+
+### Accepted Signature Headers
+
+dLocal supports two signature header formats:
+- `x-dlocal-signature`
+- `x-signature`
+
+### Webhook Handler
+
+```typescript
+import express from 'express';
+
+const app = express();
+
+app.post('/webhooks/dlocal',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    try {
+      const event = await vault.handleWebhook(
+        'dlocal',
+        req.body,
+        req.headers as Record<string, string>
+      );
+
+      console.log('Event type:', event.type);
+      console.log('Transaction ID:', event.transactionId);
+
+      switch (event.type) {
+        case 'payment.completed':
+          // Handle successful payment
+          break;
+        case 'payment.pending':
+          // Handle pending payment (common for PIX/Boleto)
+          break;
+        case 'payment.failed':
+          // Handle failed payment
+          break;
+        case 'payment.refunded':
+          // Handle refund
+          break;
+      }
+
+      res.json({ received: true });
+    } catch (error) {
+      console.error('Webhook verification failed:', error);
+      res.status(400).send('Verification failed');
+    }
+  }
+);
+```
+
+### Event Types
+
+| dLocal Event | VaultSaaS Event Type |
+|--------------|---------------------|
+| `payment.approved` | `payment.completed` |
+| `payment.captured` | `payment.completed` |
+| `payment.pending` | `payment.pending` |
+| `payment.failed` | `payment.failed` |
+| `payment.rejected` | `payment.failed` |
+| `payment.refunded` | `payment.refunded` |
+| `payment.partially_refunded` | `payment.partially_refunded` |
+| `chargeback.created` | `payment.disputed` |
+| `chargeback.closed` | `payment.dispute_resolved` |
+
+## Common Pitfalls
+
+<Warning>
+### Missing Credentials
+Missing any of `xLogin`, `xTransKey`, or `secretKey` will cause adapter initialization to fail. All three are required.
+</Warning>
+
+<Warning>
+### Currency Case Sensitivity
+Sending lowercase currencies can cause downstream mismatches. Always use uppercase: `BRL`, not `brl`.
+</Warning>
+
+<Warning>
+### Raw Webhook Body
+Not preserving the raw webhook body causes signature verification to fail. Use `express.raw()` middleware.
+</Warning>
+
+## Sandbox Testing
+
+### Sandbox Configuration
+
+Configure the sandbox base URL for testing:
+
+```typescript
+config: {
+  xLogin: process.env.DLOCAL_SANDBOX_X_LOGIN!,
+  xTransKey: process.env.DLOCAL_SANDBOX_X_TRANS_KEY!,
+  secretKey: process.env.DLOCAL_SANDBOX_SECRET_KEY!,
+  baseUrl: 'https://sandbox.dlocal.com', // Sandbox URL
+}
+```
+
+<Note>
+Keep sandbox credentials completely isolated from production credentials. Use separate environment variables.
+</Note>
+
+### Test Payment Methods
+
+Consult dLocal's sandbox documentation for test card numbers and PIX/Boleto simulation.
+
+## Payment Status Mapping
+
+| dLocal Status | VaultSaaS Status |
+|---------------|------------------|
+| `AUTHORIZED` | `authorized` |
+| `PAID` / `APPROVED` / `CAPTURED` | `completed` |
+| `PENDING` / `IN_PROCESS` | `pending` |
+| `REJECTED` / `DECLINED` | `declined` |
+| `CANCELED` / `CANCELLED` | `cancelled` |
+| `REQUIRES_ACTION` | `requires_action` |
+| Others | `failed` |
+
+## Error Handling
+
+```typescript
+try {
+  const result = await vault.charge({ /* ... */ });
+} catch (error) {
+  console.error('Error:', error.message);
+  console.error('Provider code:', error.hint?.providerCode);
+  console.error('Provider message:', error.hint?.providerMessage);
+  console.error('HTTP status:', error.hint?.httpStatus);
+}
+```
+
+## Reference
+
+- [dLocal API Documentation](https://docs.dlocal.com/)
+- [dLocal Payment Methods](https://docs.dlocal.com/payments/payment-methods)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Multi-Provider Routing" icon="route" href="/concepts/routing">
+    Route payments across multiple providers
+  </Card>
+  <Card title="Webhook Events" icon="webhook" href="/concepts/webhooks">
+    Handle payment lifecycle events
+  </Card>
+</CardGroup>

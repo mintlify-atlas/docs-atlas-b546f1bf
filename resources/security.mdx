@@ -1,0 +1,210 @@
+---
+title: Security
+description: Security policy, vulnerability reporting, and security review details for VaultSaaS SDK
+---
+
+## Supported Versions
+
+| Version | Supported          |
+| ------- | ------------------ |
+| 0.x     | <Icon icon="check" iconType="solid" /> Yes                |
+
+<Info>
+Security patches will be applied to the latest release in the supported range. Users are encouraged to stay on the latest version.
+</Info>
+
+## Reporting a Vulnerability
+
+<Warning>
+**Please do NOT open a public GitHub issue for security vulnerabilities.**
+</Warning>
+
+If you discover a security vulnerability in `@vaultsaas/core`, please report it responsibly by emailing:
+
+**security@vaultsaas.io**
+
+### What to Include
+
+Your report should include as much of the following as possible:
+
+<AccordionGroup>
+  <Accordion title="Vulnerability description">
+    A clear description of the vulnerability and how it could be exploited.
+  </Accordion>
+  
+  <Accordion title="Reproduction steps">
+    Detailed steps to reproduce the issue, including any required setup or configuration.
+  </Accordion>
+  
+  <Accordion title="Affected versions">
+    Which versions of the SDK are affected by this vulnerability.
+  </Accordion>
+  
+  <Accordion title="Impact assessment">
+    Your assessment of the impact (e.g., data exposure severity, authentication bypass scope).
+  </Accordion>
+  
+  <Accordion title="Proof of concept">
+    Any proof-of-concept code or logs, if available.
+  </Accordion>
+  
+  <Accordion title="Suggested fix">
+    A suggested fix, if you have one.
+  </Accordion>
+</AccordionGroup>
+
+### Response Timeline
+
+<Steps>
+  <Step title="Acknowledgment">
+    Within **48 hours** of your report
+  </Step>
+  
+  <Step title="Initial assessment">
+    Within **5 business days**
+  </Step>
+  
+  <Step title="Critical fixes">
+    Released within **7 days** of confirmation
+  </Step>
+  
+  <Step title="Non-critical fixes">
+    Released within **14 days** of confirmation
+  </Step>
+</Steps>
+
+<Note>
+We will keep you informed of our progress throughout the process and credit you in the release notes (unless you prefer to remain anonymous).
+</Note>
+
+## Scope
+
+### In-Scope Security Issues
+
+The following are considered in-scope security issues for this project:
+
+- Authentication or authorization bypass (e.g., API key handling flaws)
+- Sensitive data leaks (e.g., payment credentials, API keys exposed in logs or errors)
+- Injection vulnerabilities (e.g., request parameter injection, header injection)
+- Webhook signature verification bypass
+- Insecure default configurations that could lead to data exposure
+- Dependency vulnerabilities that are directly exploitable through the SDK
+- Cryptographic weaknesses in signature verification or token handling
+
+### Out of Scope
+
+The following are considered out of scope:
+
+- Social engineering attacks against VaultSaaS maintainers or users
+- Denial-of-service attacks against a user's own infrastructure
+- Vulnerabilities in third-party payment providers (e.g., Stripe, PayPal) -- report those directly to the provider
+- Issues that require physical access to a user's machine
+- Attacks that require the attacker to already have valid API credentials
+- Vulnerabilities in applications built with the SDK that are caused by the application's own code (e.g., improper secret storage)
+- Best-practice recommendations that do not represent an exploitable vulnerability
+
+## Disclosure Policy
+
+We follow a coordinated disclosure process:
+
+<Steps>
+  <Step title="Private submission">
+    The reporter submits the vulnerability privately.
+  </Step>
+  
+  <Step title="Confirmation">
+    We confirm and assess the issue.
+  </Step>
+  
+  <Step title="Fix development">
+    We develop and test a fix.
+  </Step>
+  
+  <Step title="Release">
+    We release the fix and publish a security advisory.
+  </Step>
+  
+  <Step title="Public disclosure">
+    The reporter is free to publish details after the fix is released.
+  </Step>
+</Steps>
+
+<Warning>
+We ask that you allow us a reasonable amount of time to address the issue before public disclosure.
+</Warning>
+
+## Recognition
+
+We value the security research community and are happy to acknowledge your contribution. With your permission, we will credit you by name (or handle) in:
+
+- The relevant release notes in CHANGELOG.md
+- The GitHub security advisory
+
+<Note>
+If you prefer to remain anonymous, we will respect that preference.
+</Note>
+
+## Latest Security Review
+
+### Release 0.1.0 Security Hardening
+
+**Date:** March 2, 2026
+
+**Scope:** Webhook signature verification and configuration validation hardening.
+
+#### Reviewed Areas
+
+<CardGroup cols={2}>
+  <Card title="Signature Verification" icon="shield-check">
+    - Shared signature utilities (`createHmacDigest`, `secureCompareHex`, raw payload handling)
+    - Stripe webhook verification (signature parsing, timestamp replay window, HMAC verification)
+    - dLocal webhook verification (signature header validation and HMAC verification)
+    - Paystack webhook verification (signature header validation and HMAC verification)
+  </Card>
+  
+  <Card title="Configuration Validation" icon="gear">
+    - `VaultClient` configuration validation for provider, routing, logging, idempotency, and platform config
+    - Provider config static capability declarations
+  </Card>
+</CardGroup>
+
+#### Key Findings
+
+<AccordionGroup>
+  <Accordion title="Timing-safe comparison">
+    Timing-safe comparison is used for signature validation to prevent timing attacks.
+  </Accordion>
+  
+  <Accordion title="Stripe replay protection">
+    Stripe replay protection is enforced with a 5-minute timestamp tolerance.
+  </Accordion>
+  
+  <Accordion title="Fail-closed design">
+    Missing/malformed signature headers fail closed, preventing bypass attacks.
+  </Accordion>
+  
+  <Accordion title="JSON validation">
+    Invalid JSON webhook payloads fail closed after signature checks.
+  </Accordion>
+  
+  <Accordion title="Capability declarations">
+    Provider config now requires static capability declarations (`supportedMethods`, `supportedCurrencies`, `supportedCountries`) for routing validation.
+  </Accordion>
+</AccordionGroup>
+
+#### Residual Risk Notes
+
+<Warning>
+- dLocal and Paystack webhook verification do not include provider timestamp replay checks in current adapter implementations.
+- Integrators should terminate TLS at trusted edges and enforce ingress protections (IP allowlists/WAF) for webhook endpoints.
+</Warning>
+
+#### Test Evidence Added
+
+- Expanded negative-path webhook tests for Stripe, dLocal, and Paystack
+- Expanded config-validation tests for missing static adapter metadata
+- Expanded provider error-classification tests for network/auth/rate-limit/invalid-request/fraud/auth-required cases
+
+## Contact
+
+For any security-related questions or concerns, reach out to **security@vaultsaas.io**.

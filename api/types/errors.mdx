@@ -1,0 +1,450 @@
+---
+title: "Error Types"
+description: "Error classes, codes, and categories"
+---
+
+VaultSaaS SDK provides a structured error system with error classes, standardized error codes, and categories for deterministic error handling.
+
+## Error Classes
+
+### VaultError
+
+Base error class for all VaultSaaS SDK errors. Contains structured error information including code, category, suggestion, and context.
+
+<ResponseField name="code" type="string">
+  Standardized error code identifier.
+</ResponseField>
+
+<ResponseField name="category" type="VaultErrorCategory">
+  Error category for grouping similar error types.
+</ResponseField>
+
+<ResponseField name="suggestion" type="string">
+  Human-readable suggestion for resolving the error.
+</ResponseField>
+
+<ResponseField name="docsUrl" type="string">
+  URL to error documentation with detailed troubleshooting steps.
+</ResponseField>
+
+<ResponseField name="retriable" type="boolean">
+  Whether this error is safe to retry automatically.
+</ResponseField>
+
+<ResponseField name="context" type="VaultErrorContext">
+  Additional context about the error.
+  
+  <Expandable title="properties">
+    <ResponseField name="provider" type="string">
+      Provider name where the error occurred.
+    </ResponseField>
+    
+    <ResponseField name="operation" type="string">
+      Operation that failed (e.g. "charge", "refund").
+    </ResponseField>
+    
+    <ResponseField name="requestId" type="string">
+      Request identifier for tracing.
+    </ResponseField>
+    
+    <ResponseField name="providerCode" type="string">
+      Provider-specific error code.
+    </ResponseField>
+    
+    <ResponseField name="providerMessage" type="string">
+      Provider-specific error message.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### VaultConfigError
+
+Thrown when there is an issue with VaultClient configuration or provider setup.
+
+Default code: `INVALID_CONFIGURATION`
+
+#### Example
+
+```typescript
+try {
+  const client = new VaultClient({
+    providers: [] // Missing providers
+  });
+} catch (error) {
+  if (error instanceof VaultConfigError) {
+    console.error(error.code); // "INVALID_CONFIGURATION"
+    console.error(error.suggestion); // "Check VaultClient configuration values..."
+  }
+}
+```
+
+### VaultRoutingError
+
+Thrown when the routing engine cannot find a suitable provider for a request.
+
+Default code: `NO_ROUTING_MATCH`
+
+#### Example
+
+```typescript
+try {
+  const result = await client.charge({
+    amount: 5000,
+    currency: 'JPY', // No provider configured for JPY
+    paymentMethod: { type: 'card', token: 'tok_visa' }
+  });
+} catch (error) {
+  if (error instanceof VaultRoutingError) {
+    console.error(error.code); // "NO_ROUTING_MATCH"
+    console.error(error.context.operation); // "charge"
+  }
+}
+```
+
+### VaultProviderError
+
+Thrown when a payment provider returns an error or fails to process a request.
+
+Default code: `PROVIDER_ERROR`
+
+#### Example
+
+```typescript
+try {
+  const result = await client.charge(request);
+} catch (error) {
+  if (error instanceof VaultProviderError) {
+    console.error(error.context.provider); // "stripe"
+    console.error(error.context.providerCode); // "card_declined"
+    console.error(error.retriable); // false
+  }
+}
+```
+
+### VaultNetworkError
+
+Thrown when a network-level error occurs communicating with a provider or platform.
+
+Default code: `NETWORK_ERROR`
+
+Default retriable: `true`
+
+#### Example
+
+```typescript
+try {
+  const result = await client.charge(request);
+} catch (error) {
+  if (error instanceof VaultNetworkError) {
+    console.error(error.code); // "NETWORK_ERROR" or "PROVIDER_TIMEOUT"
+    console.error(error.retriable); // true
+  }
+}
+```
+
+### WebhookVerificationError
+
+Thrown when webhook signature verification fails.
+
+Default code: `WEBHOOK_SIGNATURE_INVALID`
+
+#### Example
+
+```typescript
+try {
+  const event = client.webhooks.verify(payload, signature, secret);
+} catch (error) {
+  if (error instanceof WebhookVerificationError) {
+    console.error(error.suggestion);
+    // "Verify webhook secret, signature algorithm, and that the raw body is unmodified."
+  }
+}
+```
+
+### VaultIdempotencyConflictError
+
+Thrown when an idempotency key is reused with different request parameters.
+
+Default code: `IDEMPOTENCY_CONFLICT`
+
+#### Example
+
+```typescript
+try {
+  // First request
+  await client.charge({ amount: 5000, currency: 'USD', idempotencyKey: 'key-1', ... });
+  
+  // Retry with different amount (conflict)
+  await client.charge({ amount: 6000, currency: 'USD', idempotencyKey: 'key-1', ... });
+} catch (error) {
+  if (error instanceof VaultIdempotencyConflictError) {
+    console.error(error.code); // "IDEMPOTENCY_CONFLICT"
+  }
+}
+```
+
+---
+
+## Error Categories
+
+Errors are grouped into categories for easier handling:
+
+<ResponseField name="card_declined" type="VaultErrorCategory">
+  Payment was declined by the card issuer or network.
+</ResponseField>
+
+<ResponseField name="authentication_required" type="VaultErrorCategory">
+  Customer authentication is required (e.g. 3D Secure).
+</ResponseField>
+
+<ResponseField name="invalid_request" type="VaultErrorCategory">
+  The request contains invalid or missing parameters.
+</ResponseField>
+
+<ResponseField name="provider_error" type="VaultErrorCategory">
+  The provider encountered an error processing the request.
+</ResponseField>
+
+<ResponseField name="fraud_suspected" type="VaultErrorCategory">
+  The payment was flagged as potentially fraudulent.
+</ResponseField>
+
+<ResponseField name="rate_limited" type="VaultErrorCategory">
+  The request was rate limited by the provider.
+</ResponseField>
+
+<ResponseField name="network_error" type="VaultErrorCategory">
+  A network-level error occurred.
+</ResponseField>
+
+<ResponseField name="configuration_error" type="VaultErrorCategory">
+  There is an issue with SDK or provider configuration.
+</ResponseField>
+
+<ResponseField name="routing_error" type="VaultErrorCategory">
+  The routing engine could not select a provider.
+</ResponseField>
+
+<ResponseField name="unknown" type="VaultErrorCategory">
+  The error could not be categorized.
+</ResponseField>
+
+---
+
+## Error Codes
+
+Standardized error codes with associated metadata:
+
+### Configuration Errors
+
+<ResponseField name="INVALID_CONFIGURATION">
+  - **Category:** `configuration_error`
+  - **Retriable:** `false`
+  - **Suggestion:** Check VaultClient configuration values and required provider settings.
+</ResponseField>
+
+<ResponseField name="PROVIDER_NOT_CONFIGURED">
+  - **Category:** `configuration_error`
+  - **Retriable:** `false`
+  - **Suggestion:** Add the provider adapter and credentials to VaultClient.providers.
+</ResponseField>
+
+<ResponseField name="ADAPTER_NOT_FOUND">
+  - **Category:** `configuration_error`
+  - **Retriable:** `false`
+  - **Suggestion:** Install the provider adapter package and wire it in config.
+</ResponseField>
+
+<ResponseField name="PROVIDER_AUTH_FAILED">
+  - **Category:** `configuration_error`
+  - **Retriable:** `false`
+  - **Suggestion:** Verify provider credentials and ensure they match the current environment.
+</ResponseField>
+
+### Routing Errors
+
+<ResponseField name="NO_ROUTING_MATCH">
+  - **Category:** `routing_error`
+  - **Retriable:** `false`
+  - **Suggestion:** Add a matching routing rule or configure a default fallback provider.
+</ResponseField>
+
+<ResponseField name="ROUTING_PROVIDER_EXCLUDED">
+  - **Category:** `routing_error`
+  - **Retriable:** `false`
+  - **Suggestion:** Remove the forced provider from exclusions or choose a different provider override.
+</ResponseField>
+
+<ResponseField name="ROUTING_PROVIDER_UNAVAILABLE">
+  - **Category:** `routing_error`
+  - **Retriable:** `false`
+  - **Suggestion:** Enable the provider in config or update routing rules to a valid provider.
+</ResponseField>
+
+### Request Errors
+
+<ResponseField name="INVALID_REQUEST">
+  - **Category:** `invalid_request`
+  - **Retriable:** `false`
+  - **Suggestion:** Fix invalid or missing request fields before retrying the operation.
+</ResponseField>
+
+<ResponseField name="IDEMPOTENCY_CONFLICT">
+  - **Category:** `invalid_request`
+  - **Retriable:** `false`
+  - **Suggestion:** Reuse the same payload for an idempotency key or generate a new key.
+</ResponseField>
+
+<ResponseField name="WEBHOOK_SIGNATURE_INVALID">
+  - **Category:** `invalid_request`
+  - **Retriable:** `false`
+  - **Suggestion:** Verify webhook secret, signature algorithm, and that the raw body is unmodified.
+</ResponseField>
+
+### Payment Errors
+
+<ResponseField name="CARD_DECLINED">
+  - **Category:** `card_declined`
+  - **Retriable:** `false`
+  - **Suggestion:** Ask the customer for another payment method or a retry with updated details.
+</ResponseField>
+
+<ResponseField name="AUTHENTICATION_REQUIRED">
+  - **Category:** `authentication_required`
+  - **Retriable:** `false`
+  - **Suggestion:** Trigger customer authentication (for example, a 3DS challenge).
+</ResponseField>
+
+<ResponseField name="FRAUD_SUSPECTED">
+  - **Category:** `fraud_suspected`
+  - **Retriable:** `false`
+  - **Suggestion:** Block automatic retries and route the payment through manual fraud review.
+</ResponseField>
+
+### Network Errors
+
+<ResponseField name="RATE_LIMITED">
+  - **Category:** `rate_limited`
+  - **Retriable:** `true`
+  - **Suggestion:** Apply exponential backoff before retrying provider requests.
+</ResponseField>
+
+<ResponseField name="NETWORK_ERROR">
+  - **Category:** `network_error`
+  - **Retriable:** `true`
+  - **Suggestion:** Retry with backoff and confirm outbound connectivity/timeouts to the provider.
+</ResponseField>
+
+<ResponseField name="PROVIDER_TIMEOUT">
+  - **Category:** `network_error`
+  - **Retriable:** `true`
+  - **Suggestion:** Retry with backoff and increase timeout if the provider latency is expected.
+</ResponseField>
+
+<ResponseField name="PLATFORM_UNREACHABLE">
+  - **Category:** `network_error`
+  - **Retriable:** `true`
+  - **Suggestion:** Use local routing fallback and verify platform API key and network reachability.
+</ResponseField>
+
+### Provider Errors
+
+<ResponseField name="PROVIDER_ERROR">
+  - **Category:** `provider_error`
+  - **Retriable:** `true`
+  - **Suggestion:** Retry if transient, or fail over to another provider when configured.
+</ResponseField>
+
+<ResponseField name="PROVIDER_UNKNOWN">
+  - **Category:** `unknown`
+  - **Retriable:** `false`
+  - **Suggestion:** Capture provider response metadata and map this error case for deterministic handling.
+</ResponseField>
+
+---
+
+## Error Handling Examples
+
+### By Error Class
+
+```typescript
+try {
+  const result = await client.charge(request);
+} catch (error) {
+  if (error instanceof VaultConfigError) {
+    // Configuration issue - fix and redeploy
+    console.error('Configuration error:', error.suggestion);
+  } else if (error instanceof VaultRoutingError) {
+    // No provider available - check routing rules
+    console.error('Routing error:', error.suggestion);
+  } else if (error instanceof VaultNetworkError) {
+    // Network issue - retry with backoff
+    if (error.retriable) {
+      // Implement retry logic
+    }
+  } else if (error instanceof VaultProviderError) {
+    // Provider error - check provider status
+    console.error('Provider:', error.context.provider);
+    console.error('Provider code:', error.context.providerCode);
+  }
+}
+```
+
+### By Error Category
+
+```typescript
+try {
+  const result = await client.charge(request);
+} catch (error) {
+  if (error instanceof VaultError) {
+    switch (error.category) {
+      case 'card_declined':
+        // Ask customer for different payment method
+        break;
+      case 'authentication_required':
+        // Trigger 3DS flow
+        break;
+      case 'fraud_suspected':
+        // Flag for manual review
+        break;
+      case 'rate_limited':
+      case 'network_error':
+        // Retry with backoff
+        if (error.retriable) {
+          // Implement retry logic
+        }
+        break;
+      default:
+        // Handle other categories
+        console.error(error.suggestion);
+    }
+  }
+}
+```
+
+### By Error Code
+
+```typescript
+try {
+  const result = await client.charge(request);
+} catch (error) {
+  if (error instanceof VaultError) {
+    switch (error.code) {
+      case 'CARD_DECLINED':
+        // Specific handling for declined cards
+        break;
+      case 'PROVIDER_TIMEOUT':
+        // Specific handling for timeouts
+        break;
+      case 'NO_ROUTING_MATCH':
+        // Specific handling for routing failures
+        break;
+      default:
+        // Generic error handling
+        console.error(`Error ${error.code}: ${error.message}`);
+        console.error(`Suggestion: ${error.suggestion}`);
+        console.error(`Docs: ${error.docsUrl}`);
+    }
+  }
+}
+```

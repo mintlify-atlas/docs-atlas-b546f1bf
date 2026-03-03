@@ -1,0 +1,300 @@
+---
+title: Platform Connector
+description: Connect to VaultSaaS platform for intelligent routing and analytics
+icon: 'plug'
+---
+
+The Platform Connector is an optional feature that integrates your VaultSaaS SDK deployment with the VaultSaaS platform for intelligent routing decisions and comprehensive transaction analytics.
+
+## Overview
+
+When enabled via the `platformApiKey` configuration option, the connector provides:
+
+- **Intelligent Routing**: Remote routing decisions via `POST /v1/routing/decide`
+- **Transaction Analytics**: Batched transaction reporting to `POST /v1/transactions/report`
+- **Webhook Forwarding**: Batched webhook events to `POST /v1/events/webhook`
+- **Graceful Fallback**: Automatic fallback to local routing rules if platform is unavailable
+
+<Note>
+The platform connector automatically falls back to local routing rules if the platform API is unreachable or times out, ensuring payment processing continuity.
+</Note>
+
+## Configuration
+
+Enable the platform connector by providing a `platformApiKey` in your VaultClient configuration:
+
+```typescript
+import { VaultClient, StripeAdapter, DLocalAdapter } from '@vaultsaas/core';
+
+const vault = new VaultClient({
+  providers: {
+    stripe: {
+      adapter: StripeAdapter,
+      config: {
+        apiKey: process.env.STRIPE_API_KEY,
+      },
+    },
+    dlocal: {
+      adapter: DLocalAdapter,
+      config: {
+        xLogin: process.env.DLOCAL_X_LOGIN,
+        xTransKey: process.env.DLOCAL_X_TRANS_KEY,
+        secretKey: process.env.DLOCAL_SECRET_KEY,
+      },
+    },
+  },
+  routing: {
+    rules: [{ match: { default: true }, provider: 'stripe' }],
+  },
+  platformApiKey: process.env.VAULTSAAS_PLATFORM_API_KEY,
+  platform: {
+    baseUrl: 'https://api.vaultsaas.com',
+    timeoutMs: 100,
+    batchSize: 100,
+    flushIntervalMs: 2000,
+    maxRetries: 2,
+    initialBackoffMs: 100,
+  },
+});
+```
+
+### Configuration Options
+
+<ParamField path="platformApiKey" type="string" required>
+  API key to authenticate with the VaultSaaS platform. Setting this enables the connector.
+</ParamField>
+
+<ParamField path="platform.baseUrl" type="string" default="https://api.vaultsaas.com">
+  Base URL for the VaultSaaS platform API.
+</ParamField>
+
+<ParamField path="platform.timeoutMs" type="number" default={75}>
+  Timeout in milliseconds for routing decision requests. Keep this low to preserve p95 payment latency.
+</ParamField>
+
+<ParamField path="platform.batchSize" type="number" default={50}>
+  Maximum number of items to include in a single batch for transaction reports and webhook events.
+</ParamField>
+
+<ParamField path="platform.flushIntervalMs" type="number" default={2000}>
+  Interval in milliseconds for periodic batch flushing.
+</ParamField>
+
+<ParamField path="platform.maxRetries" type="number" default={2}>
+  Maximum number of retry attempts for failed batch POST requests.
+</ParamField>
+
+<ParamField path="platform.initialBackoffMs" type="number" default={100}>
+  Initial backoff delay in milliseconds for retry logic. Uses exponential backoff.
+</ParamField>
+
+## How It Works
+
+<Steps>
+  <Step title="Routing Decision Request">
+    When a payment is initiated, the connector sends a routing decision request to the platform:
+
+    ```typescript
+    // Platform routing request payload
+    interface PlatformRoutingRequest {
+      currency: string;
+      amount: number;
+      paymentMethod: string;
+      country?: string;
+      cardBin?: string;
+      metadata?: Record<string, string>;
+    }
+    ```
+
+    The platform responds with a routing decision:
+
+    ```typescript
+    interface PlatformRoutingDecision {
+      provider: string | null;
+      source?: string;
+      reason?: string;
+      decisionId?: string;
+      ttlMs?: number;
+      cascade?: string[];
+    }
+    ```
+  </Step>
+
+  <Step title="Fallback Handling">
+    If the platform is unavailable or the request times out, the SDK automatically falls back to local routing rules configured in your `VaultClient`.
+
+    <Warning>
+    Keep `timeoutMs` low (default: 75ms) to ensure fast fallback and maintain low payment latency.
+    </Warning>
+  </Step>
+
+  <Step title="Transaction Reporting">
+    After each transaction, the connector queues a transaction report that is batched and sent to the platform:
+
+    ```typescript
+    interface PlatformTransactionReport {
+      id: string;
+      provider: string;
+      providerId?: string;
+      status: string;
+      amount: number;
+      currency: string;
+      country?: string;
+      paymentMethod?: string;
+      cardBin?: string;
+      cardBrand?: string;
+      latencyMs?: number;
+      errorCategory?: string | null;
+      routingSource?: 'local' | 'platform';
+      routingDecisionId?: string;
+      idempotencyKey?: string;
+      timestamp: string;
+    }
+    ```
+  </Step>
+
+  <Step title="Webhook Forwarding">
+    Webhook events received from payment providers are batched and forwarded to the platform:
+
+    ```typescript
+    interface PlatformWebhookForwardEvent {
+      id: string;
+      type: string;
+      provider: string;
+      transactionId?: string;
+      providerEventId: string;
+      data: Record<string, unknown>;
+      timestamp: string;
+    }
+    ```
+  </Step>
+</Steps>
+
+## Batching and Flushing
+
+The connector uses automatic batching to minimize network overhead:
+
+- **Automatic Flush**: Batches are sent immediately when they reach `batchSize`
+- **Periodic Flush**: Remaining items are flushed every `flushIntervalMs`
+- **Manual Flush**: Call `vault.flush()` to force immediate flush
+
+```typescript
+// Manual flush before shutdown
+await vault.flush();
+vault.close();
+```
+
+## Monitoring and Logging
+
+The connector logs failures and degraded-mode operations to the configured logger:
+
+```typescript
+const vault = new VaultClient({
+  // ... other config
+  logging: {
+    logger: console, // or your custom logger
+  },
+});
+```
+
+<Tip>
+Use structured logging in production to capture platform connectivity issues and automatic fallback events.
+</Tip>
+
+## Implementation Details
+
+The connector is implemented in `/home/daytona/workspace/source/src/platform/connector.ts:78` using:
+
+- **BatchBuffer**: Queue management for transaction and webhook batches (`/home/daytona/workspace/source/src/platform/buffer.ts:1`)
+- **Retry Logic**: Exponential backoff for failed requests (`/home/daytona/workspace/source/src/platform/connector.ts:332`)
+- **Timeout Control**: AbortController for request timeouts (`/home/daytona/workspace/source/src/platform/connector.ts:278`)
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Low Timeout" icon="clock">
+    Keep `timeoutMs` low (75-100ms) to preserve p95 payment latency during platform outages.
+  </Card>
+  <Card title="Local Fallback" icon="route">
+    Always configure local routing rules as fallback for platform unavailability.
+  </Card>
+  <Card title="Structured Logging" icon="file-lines">
+    Use structured logs to monitor degraded-mode visibility and platform connectivity.
+  </Card>
+  <Card title="Graceful Shutdown" icon="power-off">
+    Call `vault.flush()` before shutdown to ensure pending batches are sent.
+  </Card>
+</CardGroup>
+
+## Example: Complete Setup
+
+```typescript
+import { DLocalAdapter, StripeAdapter, VaultClient } from '@vaultsaas/core';
+
+function mustEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing env var: ${name}`);
+  return value;
+}
+
+const vault = new VaultClient({
+  providers: {
+    stripe: {
+      adapter: StripeAdapter,
+      config: {
+        apiKey: mustEnv('STRIPE_API_KEY'),
+      },
+    },
+    dlocal: {
+      adapter: DLocalAdapter,
+      config: {
+        xLogin: mustEnv('DLOCAL_X_LOGIN'),
+        xTransKey: mustEnv('DLOCAL_X_TRANS_KEY'),
+        secretKey: mustEnv('DLOCAL_SECRET_KEY'),
+      },
+    },
+  },
+  routing: {
+    rules: [{ match: { default: true }, provider: 'stripe' }],
+  },
+  platformApiKey: mustEnv('VAULTSAAS_PLATFORM_API_KEY'),
+  platform: {
+    baseUrl: 'https://api.vaultsaas.com',
+    timeoutMs: 100,
+    batchSize: 100,
+    flushIntervalMs: 2000,
+    maxRetries: 2,
+    initialBackoffMs: 100,
+  },
+  logging: {
+    logger: console,
+  },
+});
+
+const result = await vault.charge({
+  amount: 1900,
+  currency: 'USD',
+  paymentMethod: {
+    type: 'card',
+    number: '4242424242424242',
+    expMonth: 12,
+    expYear: 2030,
+    cvc: '123',
+  },
+  customer: {
+    email: 'buyer@example.com',
+    address: {
+      line1: '5 Main St',
+      city: 'Austin',
+      postalCode: '73301',
+      country: 'US',
+    },
+  },
+});
+
+console.log(result.provider, result.routing.source, result.routing.reason);
+
+// Graceful shutdown
+await vault.flush();
+vault.close();
+```

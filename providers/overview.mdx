@@ -1,0 +1,115 @@
+---
+title: Provider Adapters Overview
+description: Learn about the payment provider adapters available in VaultSaaS SDK
+icon: plug
+---
+
+VaultSaaS SDK provides a unified interface for multiple payment providers through adapter implementations. Each adapter handles provider-specific details while exposing a consistent API.
+
+## Available Providers
+
+<CardGroup cols={3}>
+  <Card title="Stripe" icon="stripe" href="/providers/stripe">
+    Global payments with support for cards, wallets, and bank transfers
+  </Card>
+  <Card title="dLocal" icon="building-columns" href="/providers/dlocal">
+    LATAM-focused payments including PIX, Boleto, and local cards
+  </Card>
+  <Card title="Paystack" icon="layer-group" href="/providers/paystack">
+    African payments supporting Nigeria, Ghana, South Africa, and Kenya
+  </Card>
+</CardGroup>
+
+## How Adapters Work
+
+Each adapter implements the `PaymentAdapter` interface, providing:
+
+- **Charge operations** - Direct payment capture
+- **Authorize & Capture** - Two-step payment flow
+- **Refunds** - Full and partial refunds
+- **Void operations** - Cancel pending authorizations
+- **Webhook handling** - Event verification and processing
+- **Status queries** - Transaction state retrieval
+
+## Common Configuration Pattern
+
+All adapters follow a consistent configuration structure:
+
+```typescript
+import { VaultClient, StripeAdapter } from '@vaultsaas/core';
+
+const vault = new VaultClient({
+  providers: {
+    stripe: {
+      adapter: StripeAdapter,
+      config: {
+        apiKey: process.env.STRIPE_API_KEY!,
+        webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+      },
+    },
+  },
+  routing: {
+    rules: [{ match: { default: true }, provider: 'stripe' }],
+  },
+});
+```
+
+## Supported Capabilities
+
+Each adapter exposes metadata about its capabilities:
+
+```typescript
+// Access adapter metadata
+const metadata = StripeAdapter.prototype.metadata;
+
+console.log(metadata.supportedMethods);     // ['card', 'bank_transfer', 'wallet']
+console.log(metadata.supportedCurrencies);  // ['USD', 'EUR', 'GBP', ...]
+console.log(metadata.supportedCountries);   // ['US', 'GB', 'DE', ...]
+```
+
+## Payment Method Support
+
+| Provider | Card | Bank Transfer | Wallet | PIX | Boleto |
+|----------|------|---------------|--------|-----|--------|
+| Stripe   | ✓    | ✓             | ✓      | -   | -      |
+| dLocal   | ✓    | ✓             | -      | ✓   | ✓      |
+| Paystack | ✓    | ✓             | ✓      | -   | -      |
+
+## Geographic Coverage
+
+- **Stripe**: Global coverage with 40+ countries including US, EU, UK, APAC, and LATAM
+- **dLocal**: LATAM-focused (Brazil, Mexico, Argentina, Chile, Colombia, Peru, and more)
+- **Paystack**: African markets (Nigeria, Ghana, South Africa, Kenya)
+
+## Webhook Verification
+
+All adapters implement secure webhook verification:
+
+<Note>
+Webhook verification requires passing the **raw request body** (as Buffer or string) to prevent signature validation failures.
+</Note>
+
+```typescript
+// Express example
+app.post('/webhooks/:provider', express.raw({ type: 'application/json' }), async (req, res) => {
+  const provider = req.params.provider;
+  const event = await vault.handleWebhook(provider, req.body, req.headers);
+  
+  console.log(event.type, event.transactionId);
+  res.json({ received: true });
+});
+```
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Stripe Integration" icon="stripe" href="/providers/stripe">
+    Configure Stripe for global payments
+  </Card>
+  <Card title="dLocal Integration" icon="building-columns" href="/providers/dlocal">
+    Set up LATAM payment processing
+  </Card>
+  <Card title="Paystack Integration" icon="layer-group" href="/providers/paystack">
+    Enable African market payments
+  </Card>
+</CardGroup>

@@ -1,0 +1,453 @@
+---
+title: Custom Adapters
+description: Build custom payment provider adapters for VaultSaaS SDK
+icon: 'plug-circle-plus'
+---
+
+Extend VaultSaaS SDK to support any payment provider by building a custom adapter that implements the `PaymentAdapter` interface.
+
+## Overview
+
+A payment adapter is a class that translates VaultSaaS SDK's unified payment interface into provider-specific API calls. Adapters handle:
+
+- Payment operations (charge, authorize, capture, refund, void)
+- Transaction status queries
+- Payment method enumeration
+- Webhook signature verification and event parsing
+
+<Note>
+Adapters are stateless and configured per-provider instance. Each adapter receives its configuration via the constructor.
+</Note>
+
+## Adapter Interface
+
+All adapters must implement the `PaymentAdapter` interface defined in `/home/daytona/workspace/source/src/types/adapter.ts:23`:
+
+```typescript
+import type {
+  PaymentAdapter,
+  AdapterMetadata,
+  ChargeRequest,
+  AuthorizeRequest,
+  CaptureRequest,
+  RefundRequest,
+  VoidRequest,
+  PaymentResult,
+  RefundResult,
+  VoidResult,
+  TransactionStatus,
+  PaymentMethodInfo,
+  VaultEvent,
+} from '@vaultsaas/core';
+
+export interface PaymentAdapter {
+  readonly name: string;
+  readonly metadata: AdapterMetadata;
+  
+  charge(request: ChargeRequest): Promise<PaymentResult>;
+  authorize(request: AuthorizeRequest): Promise<PaymentResult>;
+  capture(request: CaptureRequest): Promise<PaymentResult>;
+  refund(request: RefundRequest): Promise<RefundResult>;
+  void(request: VoidRequest): Promise<VoidResult>;
+  getStatus(transactionId: string): Promise<TransactionStatus>;
+  listPaymentMethods(
+    country: string,
+    currency: string,
+  ): Promise<PaymentMethodInfo[]>;
+  handleWebhook?(
+    payload: Buffer | string,
+    headers: Record<string, string>,
+  ): Promise<VaultEvent> | VaultEvent;
+}
+```
+
+### Adapter Metadata
+
+Adapters must declare supported capabilities via metadata:
+
+```typescript
+export interface AdapterMetadata {
+  readonly supportedMethods: readonly string[];
+  readonly supportedCurrencies: readonly string[];
+  readonly supportedCountries: readonly string[];
+}
+```
+
+## Building a Custom Adapter
+
+<Steps>
+  <Step title="Define Configuration Interface">
+    Create a TypeScript interface for your adapter's configuration:
+
+    ```typescript
+    interface MyProviderAdapterConfig {
+      apiKey: string;
+      webhookSecret?: string;
+      baseUrl?: string;
+      timeoutMs?: number;
+      fetchFn?: typeof fetch;
+    }
+    ```
+
+    <Tip>
+    Always include optional `fetchFn` parameter to enable testing with mock HTTP clients.
+    </Tip>
+  </Step>
+
+  <Step title="Implement Adapter Class">
+    Create a class implementing `PaymentAdapter`:
+
+    ```typescript
+    import { VaultConfigError } from '@vaultsaas/core';
+    import type { PaymentAdapter, AdapterMetadata } from '@vaultsaas/core';
+
+    export class MyProviderAdapter implements PaymentAdapter {
+      readonly name = 'myprovider';
+      
+      static readonly supportedMethods = ['card', 'bank_transfer'] as const;
+      static readonly supportedCurrencies = ['USD', 'EUR', 'GBP'] as const;
+      static readonly supportedCountries = ['US', 'GB', 'DE'] as const;
+      
+      readonly metadata = {
+        supportedMethods: MyProviderAdapter.supportedMethods,
+        supportedCurrencies: MyProviderAdapter.supportedCurrencies,
+        supportedCountries: MyProviderAdapter.supportedCountries,
+      };
+
+      private readonly config: Required<Pick<MyProviderAdapterConfig, 'apiKey' | 'baseUrl' | 'timeoutMs' | 'fetchFn'>> & Pick<MyProviderAdapterConfig, 'webhookSecret'>;
+
+      constructor(rawConfig: Record<string, unknown>) {
+        // Validate and normalize configuration
+        const apiKey = typeof rawConfig.apiKey === 'string' ? rawConfig.apiKey.trim() : '';
+        if (!apiKey) {
+          throw new VaultConfigError('MyProvider adapter requires config.apiKey.', {
+            code: 'INVALID_CONFIGURATION',
+            context: { provider: 'myprovider' },
+          });
+        }
+
+        this.config = {
+          apiKey,
+          baseUrl: typeof rawConfig.baseUrl === 'string' ? rawConfig.baseUrl : 'https://api.myprovider.com',
+          timeoutMs: typeof rawConfig.timeoutMs === 'number' ? rawConfig.timeoutMs : 15000,
+          fetchFn: typeof rawConfig.fetchFn === 'function' ? rawConfig.fetchFn as typeof fetch : fetch,
+          webhookSecret: typeof rawConfig.webhookSecret === 'string' ? rawConfig.webhookSecret : undefined,
+        };
+      }
+
+      async charge(request: ChargeRequest): Promise<PaymentResult> {
+        // Implementation
+      }
+
+      // ... implement other required methods
+    }
+    ```
+  </Step>
+
+  <Step title="Implement Payment Operations">
+    Each payment operation should:
+    
+    1. Transform SDK request to provider API format
+    2. Make HTTP request to provider
+    3. Normalize provider response to SDK format
+    4. Handle errors appropriately
+
+    ```typescript
+    async charge(request: ChargeRequest): Promise<PaymentResult> {
+      // Build provider-specific request
+      const providerRequest = {
+        amount: request.amount,
+        currency: request.currency.toLowerCase(),
+        payment_method: this.mapPaymentMethod(request.paymentMethod),
+        metadata: request.metadata,
+      };
+
+      // Make API request
+      const response = await this.post('/v1/payments', providerRequest);
+
+      // Normalize response to VaultSaaS format
+      return this.normalizePaymentResult(response, request);
+    }
+
+    private normalizePaymentResult(providerResponse: any, request?: ChargeRequest): PaymentResult {
+      return {
+        id: providerResponse.id,
+        status: this.mapStatus(providerResponse.status),
+        provider: this.name,
+        providerId: providerResponse.provider_transaction_id,
+        amount: providerResponse.amount,
+        currency: providerResponse.currency.toUpperCase(),
+        paymentMethod: {
+          type: request?.paymentMethod.type ?? 'card',
+        },
+        customer: request?.customer?.email ? { email: request.customer.email } : undefined,
+        metadata: request?.metadata ?? {},
+        routing: {
+          source: 'local',
+          reason: 'myprovider adapter request',
+        },
+        createdAt: new Date(providerResponse.created_at).toISOString(),
+        providerMetadata: {
+          providerStatus: providerResponse.status,
+        },
+      };
+    }
+    ```
+  </Step>
+
+  <Step title="Implement Webhook Handling">
+    Webhook handling should verify signatures and normalize events:
+
+    ```typescript
+    async handleWebhook(
+      payload: Buffer | string,
+      headers: Record<string, string>,
+    ): Promise<VaultEvent> {
+      // Verify webhook signature
+      this.verifyWebhook(payload, headers);
+
+      // Parse payload
+      const rawPayload = typeof payload === 'string' ? payload : payload.toString('utf-8');
+      const event = JSON.parse(rawPayload);
+
+      // Normalize to VaultEvent
+      return {
+        id: event.id,
+        provider: this.name,
+        providerEventId: event.id,
+        type: this.mapEventType(event.type),
+        transactionId: event.payment_id,
+        data: event.data,
+        timestamp: new Date(event.timestamp).toISOString(),
+        raw: event,
+      };
+    }
+
+    private verifyWebhook(payload: Buffer | string, headers: Record<string, string>): void {
+      if (!this.config.webhookSecret) {
+        throw new WebhookVerificationError('Webhook secret not configured.');
+      }
+
+      const signature = headers['x-provider-signature'];
+      if (!signature) {
+        throw new WebhookVerificationError('Missing signature header.');
+      }
+
+      // Verify HMAC signature
+      const computed = createHmacDigest('sha256', this.config.webhookSecret, payload.toString());
+      if (!secureCompareHex(signature, computed)) {
+        throw new WebhookVerificationError('Signature verification failed.');
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+## Complete Example
+
+Here's a simplified but complete custom adapter:
+
+```typescript
+import {
+  VaultConfigError,
+  WebhookVerificationError,
+  type PaymentAdapter,
+  type ChargeRequest,
+  type AuthorizeRequest,
+  type CaptureRequest,
+  type RefundRequest,
+  type VoidRequest,
+  type PaymentResult,
+  type RefundResult,
+  type VoidResult,
+  type TransactionStatus,
+  type PaymentMethodInfo,
+  type VaultEvent,
+} from '@vaultsaas/core';
+
+interface CustomProviderConfig {
+  apiKey: string;
+  webhookSecret?: string;
+}
+
+export class CustomProviderAdapter implements PaymentAdapter {
+  readonly name = 'custom';
+  static readonly supportedMethods = ['card'] as const;
+  static readonly supportedCurrencies = ['USD'] as const;
+  static readonly supportedCountries = ['US'] as const;
+  readonly metadata = {
+    supportedMethods: CustomProviderAdapter.supportedMethods,
+    supportedCurrencies: CustomProviderAdapter.supportedCurrencies,
+    supportedCountries: CustomProviderAdapter.supportedCountries,
+  };
+
+  private readonly config: Required<Pick<CustomProviderConfig, 'apiKey'>> & Pick<CustomProviderConfig, 'webhookSecret'>;
+
+  constructor(rawConfig: Record<string, unknown>) {
+    const apiKey = typeof rawConfig.apiKey === 'string' ? rawConfig.apiKey : '';
+    if (!apiKey) {
+      throw new VaultConfigError('Custom adapter requires apiKey', {
+        code: 'INVALID_CONFIGURATION',
+        context: { provider: 'custom' },
+      });
+    }
+
+    this.config = {
+      apiKey,
+      webhookSecret: typeof rawConfig.webhookSecret === 'string' ? rawConfig.webhookSecret : undefined,
+    };
+  }
+
+  async charge(request: ChargeRequest): Promise<PaymentResult> {
+    // Make API call to provider
+    const response = await fetch('https://api.custom.com/charge', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.config.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        amount: request.amount,
+        currency: request.currency,
+      }),
+    });
+
+    const data = await response.json();
+
+    return {
+      id: data.id,
+      status: 'completed',
+      provider: this.name,
+      providerId: data.id,
+      amount: request.amount,
+      currency: request.currency,
+      paymentMethod: { type: 'card' },
+      metadata: {},
+      routing: { source: 'local', reason: 'custom adapter' },
+      createdAt: new Date().toISOString(),
+      providerMetadata: {},
+    };
+  }
+
+  async authorize(request: AuthorizeRequest): Promise<PaymentResult> {
+    // Similar to charge
+    return this.charge(request);
+  }
+
+  async capture(request: CaptureRequest): Promise<PaymentResult> {
+    // Implement capture logic
+    throw new Error('Not implemented');
+  }
+
+  async refund(request: RefundRequest): Promise<RefundResult> {
+    // Implement refund logic
+    throw new Error('Not implemented');
+  }
+
+  async void(request: VoidRequest): Promise<VoidResult> {
+    // Implement void logic
+    throw new Error('Not implemented');
+  }
+
+  async getStatus(transactionId: string): Promise<TransactionStatus> {
+    // Implement status query
+    throw new Error('Not implemented');
+  }
+
+  async listPaymentMethods(country: string, currency: string): Promise<PaymentMethodInfo[]> {
+    return [
+      {
+        type: 'card',
+        provider: this.name,
+        name: 'Custom Card',
+        countries: [country],
+        currencies: [currency],
+      },
+    ];
+  }
+
+  async handleWebhook(payload: Buffer | string, headers: Record<string, string>): Promise<VaultEvent> {
+    const data = JSON.parse(payload.toString());
+    return {
+      id: data.id,
+      provider: this.name,
+      providerEventId: data.id,
+      type: 'payment.completed',
+      data,
+      timestamp: new Date().toISOString(),
+      raw: data,
+    };
+  }
+}
+```
+
+## Using Your Custom Adapter
+
+Register your custom adapter with VaultClient:
+
+```typescript
+import { VaultClient } from '@vaultsaas/core';
+import { CustomProviderAdapter } from './adapters/custom';
+
+const vault = new VaultClient({
+  providers: {
+    custom: {
+      adapter: CustomProviderAdapter,
+      config: {
+        apiKey: process.env.CUSTOM_API_KEY,
+      },
+    },
+  },
+  routing: {
+    rules: [{ match: { default: true }, provider: 'custom' }],
+  },
+});
+```
+
+## Reference Implementations
+
+Study the built-in adapters for production-ready patterns:
+
+- **Stripe Adapter**: `/home/daytona/workspace/source/src/adapters/stripe-adapter.ts:268` - Full-featured with webhook verification
+- **DLocal Adapter**: `/home/daytona/workspace/source/src/adapters/dlocal-adapter.ts:236` - Custom authentication headers and HMAC signing
+
+<Warning>
+Always validate adapter configuration in the constructor and throw `VaultConfigError` for invalid config.
+</Warning>
+
+## Testing Your Adapter
+
+Use the compliance harness to validate your adapter:
+
+```typescript
+import { createAdapterComplianceHarness } from '@vaultsaas/core/testing';
+
+const adapter = new CustomProviderAdapter({ apiKey: 'test_key' });
+const harness = createAdapterComplianceHarness(adapter);
+
+// Harness validates all return values automatically
+const result = await harness.charge({
+  amount: 1000,
+  currency: 'USD',
+  paymentMethod: { type: 'card', number: '4242424242424242', expMonth: 12, expYear: 2030, cvc: '123' },
+});
+```
+
+See the [Testing Guide](/advanced/testing) for comprehensive testing strategies.
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Validate Config" icon="shield-check">
+    Always validate configuration in constructor and throw `VaultConfigError` for invalid values.
+  </Card>
+  <Card title="Normalize Responses" icon="arrows-rotate">
+    Map provider-specific statuses and field names to VaultSaaS canonical formats.
+  </Card>
+  <Card title="Handle Errors" icon="triangle-exclamation">
+    Catch provider errors and re-throw with VaultSaaS error types for consistent error handling.
+  </Card>
+  <Card title="Test Thoroughly" icon="flask">
+    Use compliance harness and mock HTTP clients to test all adapter methods.
+  </Card>
+</CardGroup>

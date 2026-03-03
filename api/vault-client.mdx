@@ -1,0 +1,725 @@
+---
+title: VaultClient
+description: Main orchestration client for payment operations including charge, authorization, capture, refund, void, and webhook handling
+---
+
+## Overview
+
+`VaultClient` is the main orchestration client that manages payment operations across multiple payment providers. It handles routing, idempotency, provider failover, and platform reporting.
+
+## Constructor
+
+```typescript
+new VaultClient(config: VaultConfig)
+```
+
+Creates a new VaultClient instance with the provided configuration.
+
+<ParamField path="config" type="VaultConfig" required>
+  Configuration object for the VaultClient. See [Configuration](/api/configuration) for details.
+</ParamField>
+
+### Example
+
+```typescript
+import { VaultClient, StripeAdapter } from '@vaultsaas/core';
+
+const client = new VaultClient({
+  providers: {
+    stripe: {
+      adapter: StripeAdapter,
+      config: {
+        apiKey: process.env.STRIPE_API_KEY,
+      },
+    },
+  },
+  routing: {
+    rules: [
+      { match: { default: true }, provider: 'stripe' }
+    ],
+  },
+});
+```
+
+## Properties
+
+<ResponseField name="config" type="VaultConfig" required>
+  The validated configuration object passed to the constructor.
+</ResponseField>
+
+## Methods
+
+### charge
+
+Executes a one-step payment charge with immediate capture.
+
+```typescript
+async charge(request: ChargeRequest): Promise<PaymentResult>
+```
+
+<ParamField path="request" type="ChargeRequest" required>
+  The charge request payload
+
+  <Expandable title="ChargeRequest properties">
+    <ParamField path="amount" type="number" required>
+      Amount in smallest currency unit (e.g., cents for USD)
+    </ParamField>
+    
+    <ParamField path="currency" type="string" required>
+      ISO 4217 currency code (e.g., "USD", "BRL")
+    </ParamField>
+    
+    <ParamField path="paymentMethod" type="PaymentMethodInput" required>
+      Payment method details. Can be card token, raw card, bank transfer, wallet, PIX, or boleto
+      
+      <Expandable title="Card with token">
+        ```typescript
+        { type: 'card', token: 'tok_visa' }
+        ```
+      </Expandable>
+      
+      <Expandable title="Raw card">
+        ```typescript
+        {
+          type: 'card',
+          number: '4242424242424242',
+          expMonth: 12,
+          expYear: 2025,
+          cvc: '123'
+        }
+        ```
+      </Expandable>
+      
+      <Expandable title="PIX">
+        ```typescript
+        { type: 'pix' }
+        ```
+      </Expandable>
+    </ParamField>
+    
+    <ParamField path="customer" type="CustomerInput">
+      Customer information
+      
+      <Expandable title="CustomerInput properties">
+        <ParamField path="email" type="string">Customer email address</ParamField>
+        <ParamField path="name" type="string">Customer full name</ParamField>
+        <ParamField path="phone" type="string">Customer phone number</ParamField>
+        <ParamField path="document" type="string">Tax ID or national document (e.g., CPF)</ParamField>
+        <ParamField path="address" type="AddressInput">Billing or shipping address</ParamField>
+      </Expandable>
+    </ParamField>
+    
+    <ParamField path="description" type="string">
+      Human-readable description of the charge
+    </ParamField>
+    
+    <ParamField path="metadata" type="Record<string, string>">
+      Arbitrary key-value pairs forwarded to the provider
+    </ParamField>
+    
+    <ParamField path="idempotencyKey" type="string">
+      Prevents duplicate charges when retrying the same request
+    </ParamField>
+    
+    <ParamField path="routing" type="RoutingPreference">
+      Per-request routing overrides
+      
+      <Expandable title="RoutingPreference properties">
+        <ParamField path="provider" type="string">Force routing to this specific provider</ParamField>
+        <ParamField path="exclude" type="string[]">Provider names to exclude from selection</ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="PaymentResult" type="object">
+  Normalized payment result
+  
+  <Expandable title="PaymentResult properties">
+    <ResponseField name="id" type="string" required>
+      VaultSaaS-normalized transaction identifier
+    </ResponseField>
+    
+    <ResponseField name="status" type="PaymentStatus" required>
+      Payment status: `completed`, `pending`, `requires_action`, `declined`, `failed`, `cancelled`, or `authorized`
+    </ResponseField>
+    
+    <ResponseField name="provider" type="string" required>
+      Name of the provider that processed the transaction (e.g., "stripe")
+    </ResponseField>
+    
+    <ResponseField name="providerId" type="string" required>
+      Provider's own identifier for this transaction
+    </ResponseField>
+    
+    <ResponseField name="amount" type="number" required>
+      Amount in smallest currency unit
+    </ResponseField>
+    
+    <ResponseField name="currency" type="string" required>
+      ISO 4217 currency code
+    </ResponseField>
+    
+    <ResponseField name="paymentMethod" type="object" required>
+      Snapshot of the payment method used
+      
+      <Expandable title="properties">
+        <ResponseField name="type" type="string" required>Payment method type</ResponseField>
+        <ResponseField name="last4" type="string">Last 4 digits of card</ResponseField>
+        <ResponseField name="brand" type="string">Card brand (e.g., "visa")</ResponseField>
+        <ResponseField name="expiryMonth" type="number">Card expiry month</ResponseField>
+        <ResponseField name="expiryYear" type="number">Card expiry year</ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="metadata" type="Record<string, string>" required>
+      Merged metadata from request and provider response
+    </ResponseField>
+    
+    <ResponseField name="routing" type="object" required>
+      How the provider was selected
+      
+      <Expandable title="properties">
+        <ResponseField name="source" type="'local' | 'platform'" required>Routing source</ResponseField>
+        <ResponseField name="reason" type="string" required>Reason for provider selection</ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="string" required>
+      ISO 8601 timestamp
+    </ResponseField>
+    
+    <ResponseField name="providerMetadata" type="Record<string, unknown>" required>
+      Raw provider-specific fields not mapped to normalized schema
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Example
+
+```typescript
+const result = await client.charge({
+  amount: 2500,
+  currency: 'USD',
+  paymentMethod: {
+    type: 'card',
+    token: 'pm_card_visa',
+  },
+  customer: {
+    email: 'buyer@example.com',
+  },
+  metadata: {
+    orderId: 'ord_123',
+  },
+  idempotencyKey: 'order-123',
+});
+
+console.log(result.status); // 'completed'
+console.log(result.provider); // 'stripe'
+```
+
+---
+
+### authorize
+
+Authorizes a payment without capturing funds (two-step payment flow).
+
+```typescript
+async authorize(request: AuthorizeRequest): Promise<PaymentResult>
+```
+
+<ParamField path="request" type="AuthorizeRequest" required>
+  Authorization request payload. Identical to `ChargeRequest`.
+</ParamField>
+
+<ResponseField name="PaymentResult" type="object">
+  Normalized payment result with `status` set to `authorized`
+</ResponseField>
+
+#### Example
+
+```typescript
+const authorization = await client.authorize({
+  amount: 5000,
+  currency: 'USD',
+  paymentMethod: {
+    type: 'card',
+    token: 'pm_card_visa',
+  },
+  customer: {
+    email: 'buyer@example.com',
+  },
+});
+
+console.log(authorization.status); // 'authorized'
+```
+
+---
+
+### capture
+
+Captures funds from a previously authorized transaction.
+
+```typescript
+async capture(request: CaptureRequest): Promise<PaymentResult>
+```
+
+<ParamField path="request" type="CaptureRequest" required>
+  Capture request payload
+  
+  <Expandable title="CaptureRequest properties">
+    <ParamField path="transactionId" type="string" required>
+      The transaction ID returned from a prior `authorize` call
+    </ParamField>
+    
+    <ParamField path="amount" type="number">
+      Partial capture amount. Omit to capture the full authorized amount
+    </ParamField>
+    
+    <ParamField path="idempotencyKey" type="string">
+      Prevents duplicate captures when retrying
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="PaymentResult" type="object">
+  Normalized payment result
+</ResponseField>
+
+#### Example
+
+```typescript
+// Full capture
+const captured = await client.capture({
+  transactionId: authorization.id,
+});
+
+// Partial capture
+const partialCapture = await client.capture({
+  transactionId: authorization.id,
+  amount: 2500, // Capture only $25.00 of the authorized amount
+});
+```
+
+---
+
+### refund
+
+Refunds a completed transaction (full or partial).
+
+```typescript
+async refund(request: RefundRequest): Promise<RefundResult>
+```
+
+<ParamField path="request" type="RefundRequest" required>
+  Refund request payload
+  
+  <Expandable title="RefundRequest properties">
+    <ParamField path="transactionId" type="string" required>
+      The transaction ID of the original charge or capture
+    </ParamField>
+    
+    <ParamField path="amount" type="number">
+      Partial refund amount. Omit to refund the full amount
+    </ParamField>
+    
+    <ParamField path="reason" type="string">
+      Human-readable reason forwarded to the provider
+    </ParamField>
+    
+    <ParamField path="idempotencyKey" type="string">
+      Prevents duplicate refunds when retrying
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="RefundResult" type="object">
+  Normalized refund result
+  
+  <Expandable title="RefundResult properties">
+    <ResponseField name="id" type="string" required>
+      Unique refund identifier
+    </ResponseField>
+    
+    <ResponseField name="transactionId" type="string" required>
+      The original transaction that was refunded
+    </ResponseField>
+    
+    <ResponseField name="status" type="'completed' | 'pending' | 'failed'" required>
+      Refund status
+    </ResponseField>
+    
+    <ResponseField name="amount" type="number" required>
+      Refunded amount in smallest currency unit
+    </ResponseField>
+    
+    <ResponseField name="currency" type="string" required>
+      ISO 4217 currency code
+    </ResponseField>
+    
+    <ResponseField name="provider" type="string" required>
+      Provider name
+    </ResponseField>
+    
+    <ResponseField name="providerId" type="string" required>
+      Provider's refund identifier
+    </ResponseField>
+    
+    <ResponseField name="reason" type="string">
+      Refund reason
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="string" required>
+      ISO 8601 timestamp
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Example
+
+```typescript
+// Full refund
+const refund = await client.refund({
+  transactionId: result.id,
+  reason: 'Customer requested refund',
+});
+
+// Partial refund
+const partialRefund = await client.refund({
+  transactionId: result.id,
+  amount: 1000, // Refund only $10.00
+  reason: 'Partial refund for damaged item',
+});
+```
+
+---
+
+### void
+
+Voids (cancels) an authorized transaction before capture.
+
+```typescript
+async void(request: VoidRequest): Promise<VoidResult>
+```
+
+<ParamField path="request" type="VoidRequest" required>
+  Void request payload
+  
+  <Expandable title="VoidRequest properties">
+    <ParamField path="transactionId" type="string" required>
+      The transaction ID of the authorization to void
+    </ParamField>
+    
+    <ParamField path="idempotencyKey" type="string">
+      Prevents duplicate void operations when retrying
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="VoidResult" type="object">
+  Normalized void result
+  
+  <Expandable title="VoidResult properties">
+    <ResponseField name="id" type="string" required>
+      Void operation identifier
+    </ResponseField>
+    
+    <ResponseField name="transactionId" type="string" required>
+      The original authorized transaction that was voided
+    </ResponseField>
+    
+    <ResponseField name="status" type="'completed' | 'failed'" required>
+      Void status
+    </ResponseField>
+    
+    <ResponseField name="provider" type="string" required>
+      Provider name
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="string" required>
+      ISO 8601 timestamp
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Example
+
+```typescript
+const voided = await client.void({
+  transactionId: authorization.id,
+});
+
+console.log(voided.status); // 'completed'
+```
+
+---
+
+### getStatus
+
+Retrieves the current status of a transaction.
+
+```typescript
+async getStatus(transactionId: string): Promise<TransactionStatus>
+```
+
+<ParamField path="transactionId" type="string" required>
+  The transaction ID to query
+</ParamField>
+
+<ResponseField name="TransactionStatus" type="object">
+  Transaction status with history
+  
+  <Expandable title="TransactionStatus properties">
+    <ResponseField name="id" type="string" required>
+      Transaction identifier
+    </ResponseField>
+    
+    <ResponseField name="status" type="PaymentStatus" required>
+      Current transaction status
+    </ResponseField>
+    
+    <ResponseField name="provider" type="string" required>
+      Provider name
+    </ResponseField>
+    
+    <ResponseField name="providerId" type="string" required>
+      Provider's transaction identifier
+    </ResponseField>
+    
+    <ResponseField name="amount" type="number" required>
+      Transaction amount
+    </ResponseField>
+    
+    <ResponseField name="currency" type="string" required>
+      ISO 4217 currency code
+    </ResponseField>
+    
+    <ResponseField name="history" type="array" required>
+      Array of status change events
+    </ResponseField>
+    
+    <ResponseField name="updatedAt" type="string" required>
+      ISO 8601 timestamp of last update
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Example
+
+```typescript
+const status = await client.getStatus('vtxn_123');
+console.log(status.status); // 'completed'
+console.log(status.history); // Array of status transitions
+```
+
+---
+
+### listPaymentMethods
+
+Lists available payment methods for a given country and currency across all configured providers.
+
+```typescript
+async listPaymentMethods(
+  country: string,
+  currency: string
+): Promise<PaymentMethodInfo[]>
+```
+
+<ParamField path="country" type="string" required>
+  ISO 3166-1 alpha-2 country code (e.g., "US", "BR")
+</ParamField>
+
+<ParamField path="currency" type="string" required>
+  ISO 4217 currency code (e.g., "USD", "BRL")
+</ParamField>
+
+<ResponseField name="PaymentMethodInfo[]" type="array">
+  Array of available payment methods
+  
+  <Expandable title="PaymentMethodInfo properties">
+    <ResponseField name="type" type="string" required>
+      Payment method type (e.g., "card", "pix", "boleto")
+    </ResponseField>
+    
+    <ResponseField name="provider" type="string" required>
+      Provider offering this payment method
+    </ResponseField>
+    
+    <ResponseField name="name" type="string" required>
+      Human-readable payment method name
+    </ResponseField>
+    
+    <ResponseField name="countries" type="string[]" required>
+      Supported countries
+    </ResponseField>
+    
+    <ResponseField name="currencies" type="string[]" required>
+      Supported currencies
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Example
+
+```typescript
+const methods = await client.listPaymentMethods('BR', 'BRL');
+
+for (const method of methods) {
+  console.log(`${method.name} via ${method.provider}`);
+}
+// Output:
+// PIX via stripe
+// Boleto via dlocal
+// Card via stripe
+```
+
+---
+
+### handleWebhook
+
+Processes incoming webhook events from payment providers.
+
+```typescript
+async handleWebhook(
+  provider: string,
+  payload: Buffer | string,
+  headers: Record<string, string>
+): Promise<VaultEvent>
+```
+
+<ParamField path="provider" type="string" required>
+  The provider name (must match a configured provider)
+</ParamField>
+
+<ParamField path="payload" type="Buffer | string" required>
+  Raw webhook payload from the provider
+</ParamField>
+
+<ParamField path="headers" type="Record<string, string>" required>
+  HTTP headers from the webhook request (used for signature verification)
+</ParamField>
+
+<ResponseField name="VaultEvent" type="object">
+  Normalized webhook event
+  
+  <Expandable title="VaultEvent properties">
+    <ResponseField name="id" type="string" required>
+      Event identifier
+    </ResponseField>
+    
+    <ResponseField name="type" type="string" required>
+      Event type (e.g., "payment.completed", "payment.failed")
+    </ResponseField>
+    
+    <ResponseField name="provider" type="string" required>
+      Provider name
+    </ResponseField>
+    
+    <ResponseField name="transactionId" type="string">
+      Associated transaction ID if applicable
+    </ResponseField>
+    
+    <ResponseField name="providerEventId" type="string">
+      Provider's event identifier
+    </ResponseField>
+    
+    <ResponseField name="data" type="Record<string, unknown>" required>
+      Normalized event data
+    </ResponseField>
+    
+    <ResponseField name="rawPayload" type="unknown" required>
+      Raw provider payload
+    </ResponseField>
+    
+    <ResponseField name="timestamp" type="string" required>
+      ISO 8601 timestamp
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Example
+
+```typescript
+import express from 'express';
+
+const app = express();
+
+app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
+  try {
+    const event = await client.handleWebhook(
+      'stripe',
+      req.body,
+      req.headers as Record<string, string>
+    );
+    
+    console.log('Webhook event:', event.type);
+    
+    if (event.type === 'payment.completed') {
+      // Handle successful payment
+      console.log('Payment completed:', event.transactionId);
+    }
+    
+    res.json({ received: true });
+  } catch (error) {
+    console.error('Webhook error:', error);
+    res.status(400).send('Webhook processing failed');
+  }
+});
+```
+
+## Error Handling
+
+All VaultClient methods may throw the following error types:
+
+- `VaultConfigError` - Configuration validation errors
+- `VaultRoutingError` - Provider routing errors
+- `VaultProviderError` - Provider-specific errors (mapped from provider SDKs)
+- `VaultNetworkError` - Network and timeout errors
+- `VaultIdempotencyConflictError` - Idempotency key conflicts
+
+```typescript
+import { VaultError, VaultRoutingError } from '@vaultsaas/core';
+
+try {
+  const result = await client.charge(request);
+} catch (error) {
+  if (error instanceof VaultRoutingError) {
+    console.error('No provider available:', error.message);
+  } else if (error instanceof VaultError) {
+    console.error('Vault error:', error.code, error.message);
+  } else {
+    throw error;
+  }
+}
+```
+
+## Implementation Details
+
+### Provider Resolution
+
+For `charge` and `authorize` operations, VaultClient resolves the provider in this order:
+
+1. **Forced provider** - If `request.routing.provider` is specified
+2. **Platform routing** - If `platformApiKey` is configured, queries the VaultSaaS platform
+3. **Local routing rules** - Evaluates local routing rules based on currency, country, amount, etc.
+4. **Fallback provider** - Uses the highest-priority provider
+
+For `capture`, `refund`, `void`, and `getStatus`, the client reuses the provider from the original transaction.
+
+### Idempotency
+
+All payment operations (`charge`, `authorize`, `capture`, `refund`, `void`) support idempotency via the `idempotencyKey` parameter. When provided:
+
+- Duplicate requests with the same key return the cached result
+- Requests with the same key but different payloads throw `VaultIdempotencyConflictError`
+- Records expire after `config.idempotency.ttlMs` (default: 24 hours)
+
+### Platform Reporting
+
+When `platformApiKey` is configured, VaultClient automatically reports:
+
+- Transaction metrics (amount, status, latency, provider)
+- Webhook events
+- Routing decisions
+
+Reporting is asynchronous and does not block payment operations.

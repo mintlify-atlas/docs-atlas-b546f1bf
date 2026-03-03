@@ -1,0 +1,243 @@
+---
+title: 'PaymentAdapter'
+description: 'Core interface that all payment provider adapters must implement'
+icon: 'plug'
+---
+
+## Overview
+
+The `PaymentAdapter` interface defines the contract that all payment provider implementations must follow. It provides a unified API for payment operations across different payment providers like Stripe, dLocal, and Paystack.
+
+## Interface Definition
+
+```typescript
+interface PaymentAdapter {
+  readonly name: string;
+  readonly metadata: AdapterMetadata;
+  charge(request: ChargeRequest): Promise<PaymentResult>;
+  authorize(request: AuthorizeRequest): Promise<PaymentResult>;
+  capture(request: CaptureRequest): Promise<PaymentResult>;
+  refund(request: RefundRequest): Promise<RefundResult>;
+  void(request: VoidRequest): Promise<VoidResult>;
+  getStatus(transactionId: string): Promise<TransactionStatus>;
+  listPaymentMethods(
+    country: string,
+    currency: string,
+  ): Promise<PaymentMethodInfo[]>;
+  handleWebhook?(
+    payload: Buffer | string,
+    headers: Record<string, string>,
+  ): Promise<VaultEvent> | VaultEvent;
+}
+```
+
+## Properties
+
+<ResponseField name="name" type="string" required>
+  The unique identifier for the payment adapter (e.g., `"stripe"`, `"dlocal"`, `"paystack"`).
+</ResponseField>
+
+<ResponseField name="metadata" type="AdapterMetadata" required>
+  Static provider capability declaration used by routing validation.
+  
+  <Expandable title="AdapterMetadata properties">
+    <ResponseField name="supportedMethods" type="readonly string[]" required>
+      Array of supported payment methods (e.g., `["card", "bank_transfer", "wallet"]`).
+    </ResponseField>
+    
+    <ResponseField name="supportedCurrencies" type="readonly string[]" required>
+      Array of supported currency codes in ISO 4217 format (e.g., `["USD", "EUR", "GBP"]`).
+    </ResponseField>
+    
+    <ResponseField name="supportedCountries" type="readonly string[]" required>
+      Array of supported country codes in ISO 3166-1 alpha-2 format (e.g., `["US", "GB", "CA"]`).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Methods
+
+### charge
+
+Process a direct charge (immediate payment capture).
+
+```typescript
+charge(request: ChargeRequest): Promise<PaymentResult>
+```
+
+<ParamField path="request" type="ChargeRequest" required>
+  The payment charge request details including amount, currency, payment method, and customer information.
+</ParamField>
+
+**Returns:** `Promise<PaymentResult>` - The result of the charge operation.
+
+---
+
+### authorize
+
+Authorize a payment without capturing funds immediately.
+
+```typescript
+authorize(request: AuthorizeRequest): Promise<PaymentResult>
+```
+
+<ParamField path="request" type="AuthorizeRequest" required>
+  The authorization request details. Similar to ChargeRequest but does not capture funds.
+</ParamField>
+
+**Returns:** `Promise<PaymentResult>` - The result of the authorization with status `"authorized"`.
+
+---
+
+### capture
+
+Capture funds from a previously authorized payment.
+
+```typescript
+capture(request: CaptureRequest): Promise<PaymentResult>
+```
+
+<ParamField path="request" type="CaptureRequest" required>
+  The capture request containing the transaction ID and optional amount to capture.
+</ParamField>
+
+**Returns:** `Promise<PaymentResult>` - The result of the capture operation.
+
+---
+
+### refund
+
+Refund a completed payment either fully or partially.
+
+```typescript
+refund(request: RefundRequest): Promise<RefundResult>
+```
+
+<ParamField path="request" type="RefundRequest" required>
+  The refund request containing transaction ID, optional amount, and reason.
+</ParamField>
+
+**Returns:** `Promise<RefundResult>` - The result of the refund operation.
+
+---
+
+### void
+
+Cancel an authorized payment before capture.
+
+```typescript
+void(request: VoidRequest): Promise<VoidResult>
+```
+
+<ParamField path="request" type="VoidRequest" required>
+  The void request containing the transaction ID to cancel.
+</ParamField>
+
+**Returns:** `Promise<VoidResult>` - The result of the void operation.
+
+---
+
+### getStatus
+
+Retrieve the current status of a transaction.
+
+```typescript
+getStatus(transactionId: string): Promise<TransactionStatus>
+```
+
+<ParamField path="transactionId" type="string" required>
+  The unique identifier of the transaction to query.
+</ParamField>
+
+**Returns:** `Promise<TransactionStatus>` - Current transaction status including history.
+
+---
+
+### listPaymentMethods
+
+Get available payment methods for a specific country and currency combination.
+
+```typescript
+listPaymentMethods(
+  country: string,
+  currency: string,
+): Promise<PaymentMethodInfo[]>
+```
+
+<ParamField path="country" type="string" required>
+  ISO 3166-1 alpha-2 country code (e.g., `"US"`, `"BR"`).
+</ParamField>
+
+<ParamField path="currency" type="string" required>
+  ISO 4217 currency code (e.g., `"USD"`, `"BRL"`).
+</ParamField>
+
+**Returns:** `Promise<PaymentMethodInfo[]>` - Array of available payment methods.
+
+---
+
+### handleWebhook (Optional)
+
+Process and verify incoming webhook events from the payment provider.
+
+```typescript
+handleWebhook?(
+  payload: Buffer | string,
+  headers: Record<string, string>,
+): Promise<VaultEvent> | VaultEvent
+```
+
+<ParamField path="payload" type="Buffer | string" required>
+  The raw webhook payload received from the provider.
+</ParamField>
+
+<ParamField path="headers" type="Record<string, string>" required>
+  HTTP headers from the webhook request, used for signature verification.
+</ParamField>
+
+**Returns:** `Promise<VaultEvent> | VaultEvent` - Normalized webhook event.
+
+**Throws:** `WebhookVerificationError` if signature validation fails.
+
+## Adapter Constructor
+
+All adapter classes must implement the `PaymentAdapterConstructor` interface:
+
+```typescript
+interface PaymentAdapterConstructor {
+  new (config: Record<string, unknown>): PaymentAdapter;
+  readonly supportedMethods: readonly string[];
+  readonly supportedCurrencies: readonly string[];
+  readonly supportedCountries: readonly string[];
+}
+```
+
+The constructor receives a configuration object with adapter-specific settings (API keys, endpoints, etc.).
+
+## Implementation Examples
+
+<Card title="StripeAdapter" icon="stripe" href="/api/adapters/stripe-adapter">
+  Stripe payment adapter implementation
+</Card>
+
+<Card title="DLocalAdapter" icon="globe" href="/api/adapters/dlocal-adapter">
+  dLocal payment adapter for Latin America
+</Card>
+
+<Card title="PaystackAdapter" icon="layer-group" href="/api/adapters/paystack-adapter">
+  Paystack payment adapter for Africa
+</Card>
+
+## Related Types
+
+- `ChargeRequest` - Request structure for direct charges
+- `AuthorizeRequest` - Request structure for payment authorization
+- `CaptureRequest` - Request structure for capturing authorized payments
+- `RefundRequest` - Request structure for refunds
+- `VoidRequest` - Request structure for voiding authorizations
+- `PaymentResult` - Standard payment operation result
+- `RefundResult` - Refund operation result
+- `VoidResult` - Void operation result
+- `TransactionStatus` - Transaction status query result
+- `PaymentMethodInfo` - Payment method information
+- `VaultEvent` - Normalized webhook event

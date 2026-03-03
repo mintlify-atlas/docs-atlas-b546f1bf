@@ -1,0 +1,91 @@
+---
+title: Introduction
+description: Open-source TypeScript SDK for payment orchestration across multiple providers
+---
+
+# VaultSaaS SDK
+
+VaultSaaS SDK is an open-source TypeScript SDK that simplifies payment orchestration across multiple payment providers. Build unified payment experiences with intelligent routing, automatic failover, and comprehensive error handling.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Multi-provider support" icon="building-columns">
+    Integrate once and accept payments through Stripe, dLocal, Paystack, and more with a unified API
+  </Card>
+  <Card title="Intelligent routing" icon="route">
+    Route transactions based on currency, country, payment method, amount, or custom metadata
+  </Card>
+  <Card title="Built-in idempotency" icon="shield-check">
+    Prevent duplicate charges with automatic idempotency key handling and conflict detection
+  </Card>
+  <Card title="Type-safe API" icon="code">
+    Full TypeScript support with comprehensive type definitions for all operations
+  </Card>
+  <Card title="Webhook handling" icon="webhook">
+    Unified webhook processing across all providers with automatic signature verification
+  </Card>
+  <Card title="Platform connector" icon="cloud">
+    Optional integration with VaultSaaS Platform for advanced routing and analytics
+  </Card>
+</CardGroup>
+
+## Supported payment providers
+
+VaultSaaS SDK currently supports the following payment providers:
+
+- **Stripe** - Global payment processing with extensive payment method support
+- **dLocal** - Emerging markets payment gateway covering Latin America, Africa, and Asia
+- **Paystack** - African payment processing with local payment method support
+
+Each provider adapter is fully tested and production-ready.
+
+## Core capabilities
+
+### Payment operations
+
+- **Charge** - Direct payment capture in a single step
+- **Authorize** - Reserve funds for later capture
+- **Capture** - Capture previously authorized funds
+- **Refund** - Return funds to the customer
+- **Void** - Cancel an authorized transaction
+- **Get Status** - Check transaction status across providers
+
+### Advanced features
+
+- **Automatic routing** - Rule-based routing with currency, country, and payment method matching
+- **Platform routing** - AI-powered routing decisions via VaultSaaS Platform API
+- **Idempotency store** - Pluggable storage for idempotency records (memory or custom)
+- **Error normalization** - Consistent error codes and categories across all providers
+- **Transaction tracking** - Automatic provider mapping for refunds, captures, and voids
+
+## Get started
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Create your first payment in under 10 minutes
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Install the SDK with npm, yarn, pnpm, or bun
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/vault-client">
+    Explore the complete API documentation
+  </Card>
+  <Card title="Routing" icon="route" href="/concepts/routing">
+    Learn how to configure intelligent payment routing
+  </Card>
+</CardGroup>
+
+## Requirements
+
+- Node.js 20+ or Bun 1.1+
+- TypeScript 5.0+ (optional, but recommended)
+- Test API keys from at least one supported provider
+
+## Open source
+
+VaultSaaS SDK is open source and available under the MIT license. Contributions are welcome!
+
+- [GitHub Repository](https://github.com/vaultsaas/core)
+- [Report Issues](https://github.com/vaultsaas/core/issues)
+- [View Changelog](https://github.com/vaultsaas/core/releases)

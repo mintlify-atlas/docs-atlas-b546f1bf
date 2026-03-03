@@ -1,0 +1,390 @@
+---
+title: Idempotency
+description: Prevent duplicate operations with idempotent requests
+---
+
+Idempotency ensures that repeated requests with the same idempotency key produce the same result, preventing duplicate charges and operations.
+
+## How It Works
+
+Enable idempotency per request by setting the `idempotencyKey` field:
+
+```typescript
+const result = await vault.charge({
+  amount: 2500,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'pm_card_visa' },
+  idempotencyKey: 'order-1001-charge-v1',
+});
+```
+
+### Behavior
+
+<Tabs>
+  <Tab title="Same Key + Same Payload">
+    Returns the original result from the idempotency store without making a new API call.
+
+    ```typescript
+    const first = await vault.charge({
+      amount: 2500,
+      currency: 'USD',
+      paymentMethod: { type: 'card', token: 'pm_card_visa' },
+      idempotencyKey: 'order-1001',
+    });
+
+    const replay = await vault.charge({
+      amount: 2500,
+      currency: 'USD',
+      paymentMethod: { type: 'card', token: 'pm_card_visa' },
+      idempotencyKey: 'order-1001',
+    });
+
+    console.log(first.id === replay.id); // true
+    ```
+  </Tab>
+
+  <Tab title="Same Key + Different Payload">
+    Throws `VaultIdempotencyConflictError` with code `IDEMPOTENCY_CONFLICT`.
+
+    ```typescript
+    await vault.charge({
+      amount: 2500,
+      currency: 'USD',
+      paymentMethod: { type: 'card', token: 'pm_card_visa' },
+      idempotencyKey: 'order-1001',
+    });
+
+    try {
+      await vault.charge({
+        amount: 3000, // Different amount!
+        currency: 'USD',
+        paymentMethod: { type: 'card', token: 'pm_card_visa' },
+        idempotencyKey: 'order-1001', // Same key
+      });
+    } catch (error) {
+      if (error instanceof VaultIdempotencyConflictError) {
+        console.error(error.code); // "IDEMPOTENCY_CONFLICT"
+        console.error(error.suggestion);
+        // "Use a unique idempotency key for different request payloads"
+      }
+    }
+    ```
+  </Tab>
+
+  <Tab title="Expired Records">
+    Records expire after the configured TTL (default: 24 hours). After expiration, the same key can be reused.
+
+    ```typescript
+    const vault = new VaultClient({
+      // ...
+      idempotency: {
+        ttlMs: 24 * 60 * 60 * 1000, // 24 hours
+      },
+    });
+    ```
+  </Tab>
+</Tabs>
+
+<Info>
+The SDK compares request payloads using a cryptographic hash to detect conflicts efficiently.
+</Info>
+
+## Configuration
+
+Configure idempotency behavior when creating the VaultClient:
+
+```typescript
+import {
+  MemoryIdempotencyStore,
+  VaultClient,
+} from '@vaultsaas/core';
+
+const vault = new VaultClient({
+  providers: { /* ... */ },
+  routing: { /* ... */ },
+  idempotency: {
+    store: new MemoryIdempotencyStore(),
+    ttlMs: 24 * 60 * 60 * 1000, // 24 hours (default)
+  },
+});
+```
+
+### Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `store` | `IdempotencyStore` | `MemoryIdempotencyStore` | Storage implementation |
+| `ttlMs` | `number` | `86400000` (24h) | Time-to-live in milliseconds |
+
+## Storage Implementations
+
+### MemoryIdempotencyStore
+
+The default in-memory implementation:
+
+```typescript
+import { MemoryIdempotencyStore } from '@vaultsaas/core';
+
+const store = new MemoryIdempotencyStore();
+```
+
+<Warning>
+**Not suitable for production multi-instance deployments**. Each instance maintains its own in-memory store, so requests to different instances won't share idempotency records.
+</Warning>
+
+### Custom Store Implementation
+
+Implement the `IdempotencyStore` interface for distributed storage:
+
+```typescript IdempotencyStore Interface
+export interface IdempotencyStore<T = unknown> {
+  get(
+    key: string,
+  ): Promise<IdempotencyRecord<T> | null> | IdempotencyRecord<T> | null;
+  set(record: IdempotencyRecord<T>): Promise<void> | void;
+  delete(key: string): Promise<void> | void;
+  clearExpired(now?: number): Promise<void> | void;
+}
+
+export interface IdempotencyRecord<T = unknown> {
+  key: string;
+  payloadHash: string;
+  result: T;
+  expiresAt: number;
+}
+```
+
+<CodeGroup>
+```typescript Redis Store Example
+import { createClient } from 'redis';
+import type { IdempotencyStore, IdempotencyRecord } from '@vaultsaas/core';
+
+export class RedisIdempotencyStore implements IdempotencyStore {
+  constructor(private client: ReturnType<typeof createClient>) {}
+
+  async get(key: string): Promise<IdempotencyRecord | null> {
+    const data = await this.client.get(`idempotency:${key}`);
+    if (!data) return null;
+    return JSON.parse(data);
+  }
+
+  async set(record: IdempotencyRecord): Promise<void> {
+    const ttl = Math.ceil((record.expiresAt - Date.now()) / 1000);
+    await this.client.setEx(
+      `idempotency:${record.key}`,
+      ttl,
+      JSON.stringify(record)
+    );
+  }
+
+  async delete(key: string): Promise<void> {
+    await this.client.del(`idempotency:${key}`);
+  }
+
+  async clearExpired(): Promise<void> {
+    // Redis handles expiration automatically
+  }
+}
+```
+
+```typescript Database Store Example
+import type { IdempotencyStore, IdempotencyRecord } from '@vaultsaas/core';
+import { db } from './database';
+
+export class DatabaseIdempotencyStore implements IdempotencyStore {
+  async get(key: string): Promise<IdempotencyRecord | null> {
+    const row = await db.query(
+      'SELECT * FROM idempotency_records WHERE key = $1 AND expires_at > $2',
+      [key, Date.now()]
+    );
+    return row ? JSON.parse(row.data) : null;
+  }
+
+  async set(record: IdempotencyRecord): Promise<void> {
+    await db.query(
+      'INSERT INTO idempotency_records (key, payload_hash, result, expires_at) VALUES ($1, $2, $3, $4) ON CONFLICT (key) DO UPDATE SET payload_hash = $2, result = $3, expires_at = $4',
+      [record.key, record.payloadHash, JSON.stringify(record.result), record.expiresAt]
+    );
+  }
+
+  async delete(key: string): Promise<void> {
+    await db.query('DELETE FROM idempotency_records WHERE key = $1', [key]);
+  }
+
+  async clearExpired(now = Date.now()): Promise<void> {
+    await db.query('DELETE FROM idempotency_records WHERE expires_at <= $1', [now]);
+  }
+}
+```
+</CodeGroup>
+
+## Implementation Details
+
+### Payload Hashing
+
+The SDK creates a SHA-256 hash of the operation and request payload:
+
+```typescript src/client/vault-client.ts:604
+const payloadHash = hashIdempotencyPayload({
+  operation,
+  request,
+});
+```
+
+### Conflict Detection
+
+```typescript src/client/vault-client.ts:610
+if (existingRecord) {
+  if (existingRecord.payloadHash !== payloadHash) {
+    throw new VaultIdempotencyConflictError(
+      'Idempotency key was reused with a different payload.',
+      {
+        operation,
+        key,
+      },
+    );
+  }
+
+  return existingRecord.result as TResult;
+}
+```
+
+### Record Storage
+
+```typescript src/client/vault-client.ts:624
+const result = await execute();
+
+await this.idempotencyStore.set({
+  key,
+  payloadHash,
+  result,
+  expiresAt: Date.now() + this.idempotencyTtlMs,
+});
+
+return result;
+```
+
+## Complete Example
+
+```typescript
+import {
+  MemoryIdempotencyStore,
+  StripeAdapter,
+  VaultClient,
+  VaultIdempotencyConflictError,
+} from '@vaultsaas/core';
+
+function mustEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing env var: ${name}`);
+  return value;
+}
+
+const vault = new VaultClient({
+  providers: {
+    stripe: {
+      adapter: StripeAdapter,
+      config: {
+        apiKey: mustEnv('STRIPE_API_KEY'),
+      },
+    },
+  },
+  routing: {
+    rules: [{ match: { default: true }, provider: 'stripe' }],
+  },
+  idempotency: {
+    store: new MemoryIdempotencyStore(),
+    ttlMs: 24 * 60 * 60 * 1000,
+  },
+});
+
+const first = await vault.charge({
+  amount: 2500,
+  currency: 'USD',
+  paymentMethod: {
+    type: 'card',
+    number: '4242424242424242',
+    expMonth: 12,
+    expYear: 2030,
+    cvc: '123',
+  },
+  idempotencyKey: 'order-1001-charge-v1',
+});
+
+const replay = await vault.charge({
+  amount: 2500,
+  currency: 'USD',
+  paymentMethod: {
+    type: 'card',
+    number: '4242424242424242',
+    expMonth: 12,
+    expYear: 2030,
+    cvc: '123',
+  },
+  idempotencyKey: 'order-1001-charge-v1',
+});
+
+console.log(first.id === replay.id); // true
+
+try {
+  await vault.charge({
+    amount: 3000,
+    currency: 'USD',
+    paymentMethod: {
+      type: 'card',
+      number: '4242424242424242',
+      expMonth: 12,
+      expYear: 2030,
+      cvc: '123',
+    },
+    idempotencyKey: 'order-1001-charge-v1',
+  });
+} catch (error) {
+  if (error instanceof VaultIdempotencyConflictError) {
+    console.error(error.code, error.suggestion);
+  }
+}
+```
+
+## Best Practices
+
+<Tip>
+**Generate unique keys per operation**
+
+Include the order ID, operation type, and version:
+
+```typescript
+const idempotencyKey = `order-${orderId}-charge-v${version}`;
+```
+</Tip>
+
+<Tip>
+**Use distributed storage in production**
+
+Implement Redis or database-backed storage for multi-instance deployments.
+</Tip>
+
+<Tip>
+**Set appropriate TTL**
+
+Balance storage costs with retry windows:
+- Short-lived operations: 1-6 hours
+- Critical operations: 24-72 hours
+</Tip>
+
+<Warning>
+**Don't reuse keys across different operations**
+
+Use separate keys for charge vs. refund, even for the same order.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Error Handling" icon="exclamation-triangle" href="/concepts/error-handling">
+    Handle idempotency conflicts
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Learn about the idempotency store
+  </Card>
+</CardGroup>

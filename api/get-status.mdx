@@ -1,0 +1,325 @@
+---
+title: 'getStatus()'
+description: 'Retrieve the current status and history of a transaction'
+icon: 'circle-info'
+---
+
+Retrieve the current status and complete history of a transaction. This method queries the payment provider for the latest transaction state and returns a full status timeline.
+
+## Method signature
+
+```typescript
+async getStatus(transactionId: string): Promise<TransactionStatus>
+```
+
+## Parameters
+
+<ParamField path="transactionId" type="string" required>
+  The transaction ID to query. Can be from any payment operation: `charge()`, `authorize()`, or `capture()`.
+</ParamField>
+
+## Returns
+
+<ResponseField name="TransactionStatus" type="object">
+  Complete transaction status including current state and historical changes.
+  
+  <Expandable title="properties" defaultOpen>
+    <ResponseField name="id" type="string" required>
+      Transaction identifier.
+    </ResponseField>
+    
+    <ResponseField name="status" type="PaymentStatus" required>
+      Current payment status: `"completed"`, `"pending"`, `"requires_action"`, `"declined"`, `"failed"`, `"cancelled"`, or `"authorized"`.
+    </ResponseField>
+    
+    <ResponseField name="provider" type="string" required>
+      Name of the provider that processed this transaction.
+    </ResponseField>
+    
+    <ResponseField name="providerId" type="string" required>
+      Provider's own identifier for this transaction.
+    </ResponseField>
+    
+    <ResponseField name="amount" type="number" required>
+      Transaction amount in smallest currency unit.
+    </ResponseField>
+    
+    <ResponseField name="currency" type="string" required>
+      ISO 4217 currency code.
+    </ResponseField>
+    
+    <ResponseField name="history" type="StatusChange[]" required>
+      Chronological list of status changes for this transaction.
+      
+      <Expandable title="StatusChange properties">
+        <ResponseField name="status" type="PaymentStatus" required>
+          Status at this point in time.
+        </ResponseField>
+        
+        <ResponseField name="timestamp" type="string" required>
+          ISO 8601 timestamp when this status was recorded.
+        </ResponseField>
+        
+        <ResponseField name="reason" type="string">
+          Optional reason or note for the status change.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="updatedAt" type="string" required>
+      ISO 8601 timestamp of the most recent status update.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Error handling
+
+The `getStatus()` method may throw the following errors:
+
+<AccordionGroup>
+  <Accordion title="VaultRoutingError">
+    Thrown when the provider for the transaction cannot be found.
+    
+    ```typescript
+    // src/client/vault-client.ts:491-495
+    if (!fallbackProvider) {
+      throw new VaultRoutingError(
+        'No configured providers are available for transaction lookup.'
+      );
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Provider-specific errors">
+    The provider may return errors such as:
+    - Transaction not found
+    - Access denied (transaction belongs to different account)
+    - Provider API unavailable
+  </Accordion>
+</AccordionGroup>
+
+## Example
+
+<CodeGroup>
+
+```typescript Check charge status
+const charge = await client.charge({
+  amount: 5000,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'tok_visa' }
+});
+
+// Later, check the status
+const status = await client.getStatus(charge.id);
+
+console.log(status.status); // 'completed'
+console.log(status.provider); // 'stripe'
+console.log(status.amount); // 5000
+console.log(status.history);
+// [
+//   { status: 'pending', timestamp: '2026-03-03T10:00:00Z' },
+//   { status: 'completed', timestamp: '2026-03-03T10:00:02Z' }
+// ]
+```
+
+```typescript Monitor authorization status
+const authorization = await client.authorize({
+  amount: 50000,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'tok_visa' }
+});
+
+// Check if still authorized
+const status = await client.getStatus(authorization.id);
+
+if (status.status === 'authorized') {
+  console.log('Authorization is still active');
+  console.log('Last updated:', status.updatedAt);
+} else if (status.status === 'completed') {
+  console.log('Authorization was captured');
+} else if (status.status === 'cancelled') {
+  console.log('Authorization was voided or expired');
+}
+```
+
+```typescript Poll for status changes
+async function waitForCompletion(transactionId: string) {
+  const maxAttempts = 10;
+  const delayMs = 2000;
+  
+  for (let i = 0; i < maxAttempts; i++) {
+    const status = await client.getStatus(transactionId);
+    
+    if (status.status === 'completed') {
+      return status;
+    }
+    
+    if (status.status === 'failed' || status.status === 'declined') {
+      throw new Error(`Payment ${status.status}`);
+    }
+    
+    if (status.status === 'requires_action') {
+      console.log('Payment requires customer action');
+      return status;
+    }
+    
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+  
+  throw new Error('Timeout waiting for payment completion');
+}
+
+const charge = await client.charge({
+  amount: 10000,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'tok_visa' }
+});
+
+const finalStatus = await waitForCompletion(charge.id);
+console.log('Payment completed:', finalStatus);
+```
+
+```typescript Check refund status
+const refund = await client.refund({
+  transactionId: 'txn_xyz',
+  amount: 5000
+});
+
+// Refunds may be pending
+if (refund.status === 'pending') {
+  // Poll the original transaction for updates
+  const status = await client.getStatus(refund.transactionId);
+  console.log('Original transaction status:', status.status);
+  console.log('Status history:', status.history);
+}
+```
+
+```typescript Audit transaction history
+const status = await client.getStatus('txn_abc123');
+
+console.log('Transaction timeline:');
+status.history.forEach((change, index) => {
+  console.log(`${index + 1}. ${change.status} at ${change.timestamp}`);
+  if (change.reason) {
+    console.log(`   Reason: ${change.reason}`);
+  }
+});
+
+// Example output:
+// Transaction timeline:
+// 1. pending at 2026-03-03T10:00:00Z
+// 2. authorized at 2026-03-03T10:00:01Z
+// 3. completed at 2026-03-03T10:15:30Z
+//    Reason: captured by merchant
+```
+
+</CodeGroup>
+
+## Implementation details
+
+The getStatus operation (`src/client/vault-client.ts:297-318`):
+
+1. Looks up the provider that handled the original transaction using the transaction index
+2. Falls back to the first configured provider if the transaction is not in the index
+3. Queries the provider adapter for the current status
+4. Records the transaction in the provider index for future lookups
+5. Queues transaction report to the platform for analytics
+6. Returns the normalized status with complete history
+
+<Info>
+  Status queries are always made to the provider that originally processed the transaction. The method automatically routes to the correct provider using the transaction index.
+</Info>
+
+<Tip>
+  Use `getStatus()` to:
+  - Verify payment completion before fulfilling orders
+  - Monitor async payment methods (bank transfers, PIX)
+  - Track authorization expiration
+  - Audit transaction history for reconciliation
+</Tip>
+
+## Status transitions
+
+<Steps>
+  <Step title="Initial state">
+    Transaction starts with `"pending"` status when first created.
+  </Step>
+  
+  <Step title="Processing">
+    Status may transition to:
+    - `"authorized"` for authorizations
+    - `"requires_action"` for 3DS or similar verification
+    - `"completed"` for successful immediate charges
+  </Step>
+  
+  <Step title="Final states">
+    Terminal states include:
+    - `"completed"` - successful charge or capture
+    - `"failed"` - processing error
+    - `"declined"` - rejected by bank or fraud check
+    - `"cancelled"` - voided by merchant
+  </Step>
+</Steps>
+
+<Warning>
+  Status history is provider-dependent. Some providers may return minimal history with only the current state, while others provide detailed audit trails.
+</Warning>
+
+## Use cases
+
+<AccordionGroup>
+  <Accordion title="Webhook verification">
+    Use `getStatus()` to verify webhook events from your payment provider:
+    
+    ```typescript
+    app.post('/webhook/payment', async (req, res) => {
+      const event = await client.handleWebhook('stripe', req.body, req.headers);
+      
+      // Verify the status with the provider
+      const status = await client.getStatus(event.transactionId);
+      
+      if (status.status === 'completed') {
+        await fulfillOrder(event.transactionId);
+      }
+      
+      res.sendStatus(200);
+    });
+    ```
+  </Accordion>
+  
+  <Accordion title="Async payment methods">
+    Monitor bank transfers or PIX payments that complete asynchronously:
+    
+    ```typescript
+    const charge = await client.charge({
+      amount: 10000,
+      currency: 'BRL',
+      paymentMethod: { type: 'pix' }
+    });
+    
+    // Display QR code to customer
+    // Then poll for completion
+    const interval = setInterval(async () => {
+      const status = await client.getStatus(charge.id);
+      if (status.status === 'completed') {
+        clearInterval(interval);
+        console.log('PIX payment received!');
+      }
+    }, 5000);
+    ```
+  </Accordion>
+  
+  <Accordion title="Reconciliation">
+    Audit transaction history for financial reconciliation:
+    
+    ```typescript
+    const transactions = await getTransactionIds();
+    
+    for (const txnId of transactions) {
+      const status = await client.getStatus(txnId);
+      console.log(`${txnId}: ${status.status} - ${status.amount}`);
+      console.log(`History: ${status.history.length} changes`);
+    }
+    ```
+  </Accordion>
+</AccordionGroup>

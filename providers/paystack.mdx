@@ -1,0 +1,352 @@
+---
+title: Paystack Adapter
+description: Complete guide to integrating Paystack with VaultSaaS SDK for African payments
+icon: layer-group
+---
+
+The Paystack adapter enables payment processing across African markets with support for cards, bank transfers, and mobile wallets in Nigeria, Ghana, South Africa, and Kenya.
+
+## Configuration
+
+### Required Credentials
+
+- `secretKey`: Paystack secret key (starts with `sk_test_` or `sk_live_`)
+- `webhookSecret`: Optional webhook signing secret (falls back to `secretKey`)
+
+### Basic Setup
+
+```typescript
+import { PaystackAdapter, VaultClient } from '@vaultsaas/core';
+
+const vault = new VaultClient({
+  providers: {
+    paystack: {
+      adapter: PaystackAdapter,
+      config: {
+        secretKey: process.env.PAYSTACK_SECRET_KEY!,
+        webhookSecret: process.env.PAYSTACK_WEBHOOK_SECRET,
+      },
+    },
+  },
+  routing: {
+    rules: [{ match: { default: true }, provider: 'paystack' }],
+  },
+});
+```
+
+### Configuration Options
+
+```typescript
+config: {
+  secretKey: string;           // Required
+  webhookSecret?: string;      // Optional, falls back to secretKey
+  baseUrl?: string;            // Optional, defaults to https://api.paystack.co
+  timeoutMs?: number;          // Request timeout (default: 15000ms)
+  fetchFn?: typeof fetch;      // Custom fetch implementation
+}
+```
+
+## Supported Capabilities
+
+### Payment Methods
+
+- **Card**: Credit and debit cards (Visa, Mastercard, Verve)
+- **Bank Transfer**: Direct bank transfers
+- **Wallet**: Mobile money and digital wallets
+
+### Currencies
+
+`NGN` (Nigerian Naira), `GHS` (Ghanaian Cedi), `ZAR` (South African Rand), `KES` (Kenyan Shilling), `USD` (US Dollar)
+
+### Countries
+
+`NG` (Nigeria), `GH` (Ghana), `ZA` (South Africa), `KE` (Kenya)
+
+## Usage Examples
+
+### Charge a Card
+
+<Note>
+**Important**: Paystack requires `customer.email` for all charge and authorize requests.
+</Note>
+
+```typescript
+const result = await vault.charge({
+  amount: 2500,
+  currency: 'NGN',
+  paymentMethod: {
+    type: 'card',
+    token: 'AUTH_test_123', // Authorization code from previous transaction
+  },
+  customer: {
+    email: 'buyer@example.com', // Required!
+  },
+  metadata: {
+    orderId: 'order_789',
+  },
+});
+
+console.log(result.id);        // Transaction reference
+console.log(result.status);    // 'completed', 'pending', etc.
+```
+
+### Bank Transfer Payment
+
+```typescript
+const bankTransfer = await vault.charge({
+  amount: 5000,
+  currency: 'NGN',
+  paymentMethod: {
+    type: 'bank_transfer',
+    bankCode: '058',           // Bank code
+    accountNumber: '0123456789',
+  },
+  customer: {
+    email: 'buyer@example.com',
+  },
+});
+```
+
+### Mobile Wallet Payment
+
+```typescript
+const walletPayment = await vault.charge({
+  amount: 1000,
+  currency: 'GHS',
+  paymentMethod: {
+    type: 'wallet',
+    walletType: 'mobile_money',
+    token: 'wallet_token_123',
+  },
+  customer: {
+    email: 'buyer@example.com',
+  },
+});
+```
+
+### Authorize & Capture Flow
+
+<Warning>
+Paystack's capture flow requires retrieving the authorization code and customer email from the verify response.
+</Warning>
+
+```typescript
+// Step 1: Authorize
+const auth = await vault.authorize({
+  amount: 10000,
+  currency: 'NGN',
+  paymentMethod: {
+    type: 'card',
+    token: 'AUTH_code_123',
+  },
+  customer: {
+    email: 'buyer@example.com', // Required
+  },
+});
+
+console.log(auth.status); // Should be 'authorized' or pending
+
+// Step 2: Capture (uses stored authorization)
+const captured = await vault.capture({
+  transactionId: auth.id,
+  amount: 10000, // Optional: partial capture
+});
+
+console.log(captured.status); // 'completed'
+```
+
+### Refund a Payment
+
+```typescript
+const refund = await vault.refund({
+  transactionId: 'txn_ref_123',
+  amount: 1000, // Amount in kobo/pesewas/cents
+});
+
+console.log(refund.status); // 'completed', 'pending', or 'failed'
+```
+
+### Void (Full Refund)
+
+```typescript
+// Void is implemented as a full refund in Paystack
+const voided = await vault.void({
+  transactionId: 'txn_ref_123',
+});
+
+console.log(voided.status);
+```
+
+## Webhooks
+
+### Signature Verification
+
+Paystack webhooks use HMAC-SHA512 signature verification.
+
+<Warning>
+**Critical**: Pass the **raw request body** as a Buffer. Parsed JSON will fail signature verification.
+</Warning>
+
+### Webhook Handler
+
+```typescript
+import express from 'express';
+
+const app = express();
+
+app.post('/webhooks/paystack',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    try {
+      const event = await vault.handleWebhook(
+        'paystack',
+        req.body,  // Raw Buffer
+        req.headers as Record<string, string>
+      );
+
+      console.log('Event type:', event.type);
+      console.log('Transaction ID:', event.transactionId);
+
+      switch (event.type) {
+        case 'payment.completed':
+          // Handle successful charge
+          break;
+        case 'payment.failed':
+          // Handle failed payment
+          break;
+        case 'payment.refunded':
+          // Handle refund
+          break;
+        case 'payment.disputed':
+          // Handle chargeback
+          break;
+      }
+
+      res.json({ received: true });
+    } catch (error) {
+      console.error('Webhook verification failed:', error);
+      res.status(400).send('Verification failed');
+    }
+  }
+);
+```
+
+### Signature Header
+
+Paystack includes the signature in the `x-paystack-signature` header.
+
+### Supported Event Types
+
+| Paystack Event | VaultSaaS Event Type |
+|----------------|---------------------|
+| `charge.success` | `payment.completed` |
+| `charge.failed` | `payment.failed` |
+| `charge.pending` | `payment.pending` |
+| `refund.processed` / `refund.success` | `payment.refunded` |
+| `refund.pending` | `payment.partially_refunded` |
+| `dispute.create` / `charge.dispute.create` | `payment.disputed` |
+| `dispute.resolve` / `charge.dispute.resolve` | `payment.dispute_resolved` |
+| `transfer.success` | `payout.completed` |
+| `transfer.failed` | `payout.failed` |
+
+## Common Pitfalls
+
+<Warning>
+### Missing Customer Email
+`customer.email` is **required** for all charge and authorize requests. Requests without email will fail.
+</Warning>
+
+```typescript
+// ❌ Will fail
+await vault.charge({
+  amount: 1000,
+  currency: 'NGN',
+  paymentMethod: { type: 'card', token: 'AUTH_123' },
+});
+
+// ✅ Correct
+await vault.charge({
+  amount: 1000,
+  currency: 'NGN',
+  paymentMethod: { type: 'card', token: 'AUTH_123' },
+  customer: { email: 'buyer@example.com' },
+});
+```
+
+<Warning>
+### Capture Requirements
+Capture requires a previously stored authorization code and customer email from the verify response. Test the full flow.
+</Warning>
+
+<Warning>
+### Malformed Signature Headers
+Missing or malformed `x-paystack-signature` headers will fail webhook handling. Ensure your webhook endpoint is configured correctly in Paystack dashboard.
+</Warning>
+
+## Test Mode
+
+### Test Credentials
+
+Use test secret keys for staging:
+
+```typescript
+config: {
+  secretKey: 'sk_test_your_test_key_here',
+  webhookSecret: process.env.PAYSTACK_TEST_WEBHOOK_SECRET,
+}
+```
+
+### Testing Capture Flow
+
+When testing capture, validate both the verify step (to get authorization code) and the charge_authorization step:
+
+1. Create test authorization
+2. Verify transaction to get `authorization_code`
+3. Use `authorization_code` in capture request
+
+### Test Events
+
+Use Paystack's webhook testing tools in the dashboard to send test events to your endpoint.
+
+## Payment Status Mapping
+
+| Paystack Status | VaultSaaS Status |
+|-----------------|------------------|
+| `success` | `completed` |
+| `pending` / `ongoing` / `queued` | `pending` |
+| `abandoned` | `cancelled` |
+| `failed` / `reversed` | `failed` |
+| Others | `failed` |
+
+## Error Handling
+
+```typescript
+try {
+  const result = await vault.charge({ /* ... */ });
+} catch (error) {
+  if (error.code === 'INVALID_REQUEST') {
+    console.error('Request validation failed:', error.message);
+  } else if (error.code === 'PROVIDER_ERROR') {
+    console.error('Provider error:', error.hint.providerMessage);
+    console.error('Provider code:', error.hint.providerCode);
+    console.error('HTTP status:', error.hint.httpStatus);
+  }
+}
+```
+
+## Reference
+
+- [Paystack API Documentation](https://paystack.com/docs/api/)
+- [Paystack Payment Methods](https://paystack.com/docs/payments/payment-methods/)
+- [Paystack Webhooks](https://paystack.com/docs/payments/webhooks/)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Multi-Provider Setup" icon="layer-group" href="/concepts/routing">
+    Combine multiple providers with routing
+  </Card>
+  <Card title="Event Handling" icon="bell" href="/concepts/webhooks">
+    Process payment lifecycle events
+  </Card>
+</CardGroup>

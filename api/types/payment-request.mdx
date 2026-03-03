@@ -1,0 +1,226 @@
+---
+title: "Payment Request Types"
+description: "Request payload types for payment operations"
+---
+
+Payment request types define the shape of data you pass to VaultSaaS SDK operations like charge, authorize, capture, refund, and void.
+
+## ChargeRequest
+
+Request payload for a one-step charge (immediate capture).
+
+<ResponseField name="amount" type="number" required>
+  Amount in the smallest currency unit (e.g. cents for USD).
+</ResponseField>
+
+<ResponseField name="currency" type="string" required>
+  ISO 4217 currency code (e.g. "USD", "BRL").
+</ResponseField>
+
+<ResponseField name="paymentMethod" type="PaymentMethodInput" required>
+  Payment method to charge. See [PaymentMethodInput](/api/types/payment-method).
+</ResponseField>
+
+<ResponseField name="customer" type="CustomerInput">
+  Customer details passed with the charge request.
+  
+  <Expandable title="properties">
+    <ResponseField name="email" type="string">
+      Customer email address.
+    </ResponseField>
+    
+    <ResponseField name="name" type="string">
+      Customer full name.
+    </ResponseField>
+    
+    <ResponseField name="phone" type="string">
+      Customer phone number.
+    </ResponseField>
+    
+    <ResponseField name="document" type="string">
+      Tax ID or national document number (e.g. CPF in Brazil).
+    </ResponseField>
+    
+    <ResponseField name="address" type="AddressInput">
+      Customer billing or shipping address.
+      
+      <Expandable title="properties">
+        <ResponseField name="line1" type="string" required>
+          Primary address line.
+        </ResponseField>
+        
+        <ResponseField name="line2" type="string">
+          Secondary address line (apartment, suite, etc.).
+        </ResponseField>
+        
+        <ResponseField name="city" type="string" required>
+          City name.
+        </ResponseField>
+        
+        <ResponseField name="state" type="string">
+          State or province code.
+        </ResponseField>
+        
+        <ResponseField name="postalCode" type="string" required>
+          Postal or ZIP code.
+        </ResponseField>
+        
+        <ResponseField name="country" type="string" required>
+          ISO 3166-1 alpha-2 country code (e.g. "US", "BR").
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Human-readable description of the charge.
+</ResponseField>
+
+<ResponseField name="metadata" type="Record<string, string>">
+  Arbitrary key-value pairs forwarded to the provider.
+</ResponseField>
+
+<ResponseField name="idempotencyKey" type="string">
+  Prevents duplicate charges when retrying the same request.
+</ResponseField>
+
+<ResponseField name="routing" type="RoutingPreference">
+  Per-request routing overrides.
+  
+  <Expandable title="properties">
+    <ResponseField name="provider" type="string">
+      Force routing to this provider, bypassing rules.
+    </ResponseField>
+    
+    <ResponseField name="exclude" type="string[]">
+      Provider names to exclude from routing consideration.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example
+
+```typescript
+const request: ChargeRequest = {
+  amount: 5000,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'tok_visa' },
+  idempotencyKey: 'order-123',
+};
+```
+
+---
+
+## AuthorizeRequest
+
+Request payload for a two-step authorization (hold funds without capture). Identical shape to `ChargeRequest`; the client calls `authorize` instead of `charge`.
+
+```typescript
+type AuthorizeRequest = ChargeRequest;
+```
+
+### Example
+
+```typescript
+const request: AuthorizeRequest = {
+  amount: 10000,
+  currency: 'USD',
+  paymentMethod: { 
+    type: 'card',
+    number: '4242424242424242',
+    expMonth: 12,
+    expYear: 2025,
+    cvc: '123'
+  },
+  customer: {
+    email: 'customer@example.com',
+    name: 'John Doe'
+  },
+  idempotencyKey: 'auth-456',
+};
+```
+
+---
+
+## CaptureRequest
+
+Request payload to capture a previously authorized transaction.
+
+<ResponseField name="transactionId" type="string" required>
+  The transaction ID returned from a prior `authorize` call.
+</ResponseField>
+
+<ResponseField name="amount" type="number">
+  Partial capture amount. Omit to capture the full authorized amount.
+</ResponseField>
+
+<ResponseField name="idempotencyKey" type="string">
+  Prevents duplicate captures when retrying the same request.
+</ResponseField>
+
+### Example
+
+```typescript
+const request: CaptureRequest = {
+  transactionId: 'txn_abc123',
+  amount: 5000, // Partial capture
+  idempotencyKey: 'capture-789',
+};
+```
+
+---
+
+## RefundRequest
+
+Request payload to refund a completed transaction (full or partial).
+
+<ResponseField name="transactionId" type="string" required>
+  The transaction ID of the original charge or capture.
+</ResponseField>
+
+<ResponseField name="amount" type="number">
+  Partial refund amount. Omit to refund the full amount.
+</ResponseField>
+
+<ResponseField name="reason" type="string">
+  Human-readable reason forwarded to the provider.
+</ResponseField>
+
+<ResponseField name="idempotencyKey" type="string">
+  Prevents duplicate refunds when retrying the same request.
+</ResponseField>
+
+### Example
+
+```typescript
+const request: RefundRequest = {
+  transactionId: 'txn_abc123',
+  amount: 2500, // Partial refund
+  reason: 'Customer requested partial refund',
+  idempotencyKey: 'refund-101',
+};
+```
+
+---
+
+## VoidRequest
+
+Request payload to void (cancel) an authorized transaction before capture.
+
+<ResponseField name="transactionId" type="string" required>
+  The transaction ID of the authorization to void.
+</ResponseField>
+
+<ResponseField name="idempotencyKey" type="string">
+  Prevents duplicate void operations when retrying the same request.
+</ResponseField>
+
+### Example
+
+```typescript
+const request: VoidRequest = {
+  transactionId: 'txn_auth_xyz',
+  idempotencyKey: 'void-202',
+};
+```

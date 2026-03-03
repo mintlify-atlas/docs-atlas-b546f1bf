@@ -1,0 +1,175 @@
+---
+title: Installation
+description: Install VaultSaaS SDK with npm, yarn, pnpm, or bun
+---
+
+# Installation
+
+VaultSaaS SDK is distributed as an npm package and can be installed using any Node.js package manager.
+
+## Package managers
+
+Install `@vaultsaas/core` using your preferred package manager:
+
+<CodeGroup>
+```bash npm
+npm install @vaultsaas/core
+```
+
+```bash yarn
+yarn add @vaultsaas/core
+```
+
+```bash pnpm
+pnpm add @vaultsaas/core
+```
+
+```bash bun
+bun add @vaultsaas/core
+```
+</CodeGroup>
+
+## Requirements
+
+### Node.js version
+
+VaultSaaS SDK requires Node.js 20 or later:
+
+```bash
+node --version
+# Should output v20.0.0 or higher
+```
+
+<Warning>
+  Node.js 18 and earlier are not supported. The SDK uses modern JavaScript features that require Node.js 20+.
+</Warning>
+
+### Bun support
+
+The SDK is fully compatible with Bun 1.1+:
+
+```bash
+bun --version
+# Should output 1.1.0 or higher
+```
+
+## TypeScript support
+
+VaultSaaS SDK is written in TypeScript and includes full type definitions out of the box. No additional `@types` packages are needed.
+
+### TypeScript configuration
+
+For the best experience, use TypeScript 5.0 or later with the following compiler options:
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  }
+}
+```
+
+<Info>
+  TypeScript is optional. You can use VaultSaaS SDK with plain JavaScript, but you'll miss out on type safety and autocomplete.
+</Info>
+
+## Module formats
+
+The package exports both ESM and CommonJS formats:
+
+```json package.json
+{
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts"
+}
+```
+
+### ESM (recommended)
+
+```typescript
+import { VaultClient, StripeAdapter } from '@vaultsaas/core';
+```
+
+### CommonJS
+
+```javascript
+const { VaultClient, StripeAdapter } = require('@vaultsaas/core');
+```
+
+## Provider dependencies
+
+VaultSaaS SDK has zero runtime dependencies. All provider adapters are included in the core package:
+
+- `StripeAdapter` - Stripe integration
+- `DLocalAdapter` - dLocal integration
+- `PaystackAdapter` - Paystack integration
+
+<Note>
+  You don't need to install separate Stripe, dLocal, or Paystack SDKs. VaultSaaS SDK communicates with providers directly via their REST APIs.
+</Note>
+
+## Verify installation
+
+Verify the installation by importing the SDK:
+
+```typescript verify.ts
+import { VaultClient, StripeAdapter } from '@vaultsaas/core';
+
+console.log('VaultSaaS SDK installed successfully!');
+console.log('VaultClient:', typeof VaultClient);
+console.log('StripeAdapter:', typeof StripeAdapter);
+```
+
+Run the verification:
+
+<CodeGroup>
+```bash npm
+npx tsx verify.ts
+```
+
+```bash bun
+bun verify.ts
+```
+</CodeGroup>
+
+Expected output:
+
+```
+VaultSaaS SDK installed successfully!
+VaultClient: function
+StripeAdapter: function
+```
+
+## Version compatibility
+
+| VaultSaaS SDK | Node.js | Bun | TypeScript |
+|---------------|---------|-----|------------|
+| 0.1.x         | 20+     | 1.1+ | 5.0+       |
+
+<Info>
+  Check the [changelog](https://github.com/vaultsaas/core/releases) for version-specific updates and breaking changes.
+</Info>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Create your first payment in under 10 minutes
+  </Card>
+  <Card title="Configuration" icon="gear" href="/api/configuration">
+    Learn how to configure the VaultClient for your use case
+  </Card>
+  <Card title="Stripe setup" icon="stripe" href="/providers/stripe">
+    Configure the Stripe adapter
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/vault-client">
+    Explore the complete API documentation
+  </Card>
+</CardGroup>

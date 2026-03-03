@@ -1,0 +1,503 @@
+---
+title: Testing
+description: Test VaultSaaS SDK integrations with mock adapters and compliance utilities
+icon: 'flask-vial'
+---
+
+VaultSaaS SDK provides comprehensive testing utilities to help you test payment integrations without hitting real payment providers.
+
+## Testing Utilities Overview
+
+The SDK's testing utilities are exported from `@vaultsaas/core/testing` and include:
+
+- **MockAdapter**: Configurable mock payment adapter with scenario support
+- **Compliance Harness**: Validates adapter implementations against SDK contracts
+- **Webhook Helpers**: Generate signed webhook payloads for testing
+
+<Note>
+All testing utilities are included in the main SDK package and available at `/home/daytona/workspace/source/src/testing/index.ts:1`.
+</Note>
+
+## Mock Adapter
+
+The `MockAdapter` class allows you to simulate payment provider behavior in tests without making real API calls.
+
+### Basic Usage
+
+```typescript
+import { VaultClient, MockAdapter } from '@vaultsaas/core';
+import type { ChargeRequest, PaymentResult } from '@vaultsaas/core';
+
+const mockAdapter = new MockAdapter({
+  handlers: {
+    async charge(request: ChargeRequest): Promise<PaymentResult> {
+      return {
+        id: 'txn_mock_123',
+        status: 'completed',
+        provider: 'mock',
+        providerId: 'mock_pi_123',
+        amount: request.amount,
+        currency: request.currency,
+        paymentMethod: { type: request.paymentMethod.type },
+        metadata: request.metadata ?? {},
+        routing: { source: 'local', reason: 'mock adapter' },
+        createdAt: new Date().toISOString(),
+        providerMetadata: {},
+      };
+    },
+  },
+});
+
+const vault = new VaultClient({
+  providers: {
+    mock: {
+      adapter: MockAdapter,
+      config: {},
+    },
+  },
+  routing: {
+    rules: [{ match: { default: true }, provider: 'mock' }],
+  },
+});
+
+const result = await vault.charge({
+  amount: 1000,
+  currency: 'USD',
+  paymentMethod: {
+    type: 'card',
+    number: '4242424242424242',
+    expMonth: 12,
+    expYear: 2030,
+    cvc: '123',
+  },
+});
+
+console.log(result.status); // 'completed'
+```
+
+### Scenario-Based Testing
+
+Use scenarios to test different payment outcomes:
+
+```typescript
+import { MockAdapter } from '@vaultsaas/core/testing';
+
+const mockAdapter = new MockAdapter({
+  scenarios: {
+    charge: [
+      // First call succeeds
+      {
+        id: 'txn_1',
+        status: 'completed',
+        provider: 'mock',
+        providerId: 'pi_1',
+        amount: 1000,
+        currency: 'USD',
+        paymentMethod: { type: 'card' },
+        metadata: {},
+        routing: { source: 'local', reason: 'test' },
+        createdAt: new Date().toISOString(),
+        providerMetadata: {},
+      },
+      // Second call fails
+      new Error('Insufficient funds'),
+      // Third call requires action
+      {
+        id: 'txn_3',
+        status: 'requires_action',
+        provider: 'mock',
+        providerId: 'pi_3',
+        amount: 1000,
+        currency: 'USD',
+        paymentMethod: { type: 'card' },
+        metadata: {},
+        routing: { source: 'local', reason: 'test' },
+        createdAt: new Date().toISOString(),
+        providerMetadata: {},
+      },
+    ],
+  },
+});
+
+// First charge succeeds
+const result1 = await mockAdapter.charge(request);
+console.log(result1.status); // 'completed'
+
+// Second charge throws error
+try {
+  await mockAdapter.charge(request);
+} catch (error) {
+  console.log(error.message); // 'Insufficient funds'
+}
+
+// Third charge requires action
+const result3 = await mockAdapter.charge(request);
+console.log(result3.status); // 'requires_action'
+```
+
+### Dynamic Scenarios
+
+Use functions for dynamic scenario behavior:
+
+```typescript
+const mockAdapter = new MockAdapter({
+  scenarios: {
+    charge: [
+      // Dynamic response based on request
+      (request) => ({
+        id: `txn_${Date.now()}`,
+        status: request.amount > 10000 ? 'declined' : 'completed',
+        provider: 'mock',
+        providerId: `pi_${Date.now()}`,
+        amount: request.amount,
+        currency: request.currency,
+        paymentMethod: { type: request.paymentMethod.type },
+        metadata: request.metadata ?? {},
+        routing: { source: 'local', reason: 'test' },
+        createdAt: new Date().toISOString(),
+        providerMetadata: {},
+      }),
+    ],
+  },
+});
+```
+
+### Enqueueing Scenarios
+
+Add scenarios dynamically during tests:
+
+```typescript
+const mockAdapter = new MockAdapter();
+
+// Enqueue a successful charge
+mockAdapter.enqueue('charge', {
+  id: 'txn_1',
+  status: 'completed',
+  provider: 'mock',
+  providerId: 'pi_1',
+  amount: 1000,
+  currency: 'USD',
+  paymentMethod: { type: 'card' },
+  metadata: {},
+  routing: { source: 'local', reason: 'test' },
+  createdAt: new Date().toISOString(),
+  providerMetadata: {},
+});
+
+// Enqueue a failure
+mockAdapter.enqueue('charge', new Error('Card declined'));
+
+const result1 = await mockAdapter.charge(request); // succeeds
+try {
+  await mockAdapter.charge(request); // throws error
+} catch (error) {
+  console.log(error.message); // 'Card declined'
+}
+```
+
+## Adapter Compliance Harness
+
+The compliance harness validates that adapter implementations conform to VaultSaaS SDK contracts by checking return value structure and types.
+
+### Using the Harness
+
+```typescript
+import { createAdapterComplianceHarness } from '@vaultsaas/core/testing';
+import { StripeAdapter } from '@vaultsaas/core';
+
+const adapter = new StripeAdapter({
+  apiKey: process.env.STRIPE_TEST_KEY,
+});
+
+const harness = createAdapterComplianceHarness(adapter, {
+  expectedProvider: 'stripe',
+});
+
+// All methods automatically validate return values
+try {
+  const result = await harness.charge({
+    amount: 1000,
+    currency: 'USD',
+    paymentMethod: {
+      type: 'card',
+      number: '4242424242424242',
+      expMonth: 12,
+      expYear: 2030,
+      cvc: '123',
+    },
+  });
+  console.log('Charge validated:', result.id);
+} catch (error) {
+  if (error.name === 'AdapterComplianceError') {
+    console.error('Compliance error:', error.message, error.field);
+  }
+}
+```
+
+### Validation Functions
+
+You can also use individual validation functions:
+
+```typescript
+import {
+  validatePaymentResult,
+  validateRefundResult,
+  validateVoidResult,
+  validateTransactionStatus,
+  validatePaymentMethods,
+  validateWebhookEvent,
+} from '@vaultsaas/core/testing';
+
+const result = await adapter.charge(request);
+validatePaymentResult(result, 'charge', 'stripe');
+
+const methods = await adapter.listPaymentMethods('US', 'USD');
+validatePaymentMethods(methods, 'listPaymentMethods', 'stripe');
+```
+
+## Webhook Testing
+
+Generate properly signed webhook payloads for testing:
+
+### Stripe Webhooks
+
+```typescript
+import { createStripeSignedWebhookPayload } from '@vaultsaas/core/testing';
+import { StripeAdapter } from '@vaultsaas/core';
+
+const adapter = new StripeAdapter({
+  apiKey: 'sk_test_123',
+  webhookSecret: 'whsec_test_secret',
+});
+
+const webhookPayload = {
+  id: 'evt_test_123',
+  type: 'payment_intent.succeeded',
+  created: Math.floor(Date.now() / 1000),
+  data: {
+    object: {
+      id: 'pi_123',
+      status: 'succeeded',
+      amount: 1000,
+      currency: 'usd',
+    },
+  },
+};
+
+const { payload, headers } = createStripeSignedWebhookPayload(
+  webhookPayload,
+  'whsec_test_secret',
+);
+
+const event = await adapter.handleWebhook(payload, headers);
+console.log(event.type); // 'payment.completed'
+```
+
+### DLocal Webhooks
+
+```typescript
+import { createDLocalSignedWebhookPayload } from '@vaultsaas/core/testing';
+import { DLocalAdapter } from '@vaultsaas/core';
+
+const adapter = new DLocalAdapter({
+  xLogin: 'test_login',
+  xTransKey: 'test_key',
+  secretKey: 'test_secret',
+  webhookSecret: 'webhook_secret',
+});
+
+const webhookPayload = {
+  id: 'evt_123',
+  type: 'payment.approved',
+  payment_id: 'pay_123',
+  data: {
+    status: 'APPROVED',
+    amount: 1000,
+  },
+};
+
+const { payload, headers } = createDLocalSignedWebhookPayload(
+  webhookPayload,
+  'webhook_secret',
+);
+
+const event = await adapter.handleWebhook(payload, headers);
+console.log(event.type); // 'payment.completed'
+```
+
+### Generic Webhooks
+
+```typescript
+import { createSignedWebhookPayload } from '@vaultsaas/core/testing';
+
+const { payload, headers } = createSignedWebhookPayload(
+  { event: 'payment.success' },
+  'secret_key',
+  {
+    provider: 'generic',
+    headerName: 'x-custom-signature',
+  },
+);
+```
+
+## Testing Custom Adapters
+
+<Steps>
+  <Step title="Create Mock HTTP Client">
+    Use a mock `fetchFn` to avoid real API calls:
+
+    ```typescript
+    const mockFetch = async (url: string, options: RequestInit): Promise<Response> => {
+      return new Response(
+        JSON.stringify({
+          id: 'txn_123',
+          status: 'succeeded',
+          amount: 1000,
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      );
+    };
+
+    const adapter = new CustomAdapter({
+      apiKey: 'test_key',
+      fetchFn: mockFetch,
+    });
+    ```
+  </Step>
+
+  <Step title="Test with Compliance Harness">
+    Wrap your adapter in the compliance harness:
+
+    ```typescript
+    import { createAdapterComplianceHarness } from '@vaultsaas/core/testing';
+
+    const harness = createAdapterComplianceHarness(adapter, {
+      expectedProvider: 'custom',
+    });
+
+    // Automatically validates return values
+    const result = await harness.charge({
+      amount: 1000,
+      currency: 'USD',
+      paymentMethod: { type: 'card', number: '4242424242424242', expMonth: 12, expYear: 2030, cvc: '123' },
+    });
+    ```
+  </Step>
+
+  <Step title="Test All Operations">
+    Test each adapter method:
+
+    ```typescript
+    describe('CustomAdapter', () => {
+      it('should charge successfully', async () => {
+        const result = await harness.charge(chargeRequest);
+        expect(result.status).toBe('completed');
+      });
+
+      it('should authorize successfully', async () => {
+        const result = await harness.authorize(authorizeRequest);
+        expect(result.status).toBe('authorized');
+      });
+
+      it('should capture successfully', async () => {
+        const result = await harness.capture({ transactionId: 'txn_123' });
+        expect(result.status).toBe('completed');
+      });
+
+      it('should refund successfully', async () => {
+        const result = await harness.refund({ transactionId: 'txn_123', amount: 500 });
+        expect(result.status).toBe('completed');
+      });
+
+      it('should handle webhooks', async () => {
+        const event = await harness.handleWebhook(payload, headers);
+        expect(event.type).toBe('payment.completed');
+      });
+    });
+    ```
+  </Step>
+</Steps>
+
+## Testing VaultClient
+
+Test your integration end-to-end with MockAdapter:
+
+```typescript
+import { VaultClient, MockAdapter } from '@vaultsaas/core';
+import type { PaymentResult } from '@vaultsaas/core';
+
+describe('Payment Flow', () => {
+  it('should process payment successfully', async () => {
+    const vault = new VaultClient({
+      providers: {
+        mock: {
+          adapter: MockAdapter,
+          config: {},
+        },
+      },
+      routing: {
+        rules: [{ match: { default: true }, provider: 'mock' }],
+      },
+    });
+
+    // Configure mock to return success
+    const mockAdapter = vault.providers.mock.adapter as MockAdapter;
+    mockAdapter.enqueue('charge', {
+      id: 'txn_success',
+      status: 'completed',
+      provider: 'mock',
+      providerId: 'pi_123',
+      amount: 1000,
+      currency: 'USD',
+      paymentMethod: { type: 'card' },
+      metadata: {},
+      routing: { source: 'local', reason: 'test' },
+      createdAt: new Date().toISOString(),
+      providerMetadata: {},
+    });
+
+    const result = await vault.charge({
+      amount: 1000,
+      currency: 'USD',
+      paymentMethod: {
+        type: 'card',
+        number: '4242424242424242',
+        expMonth: 12,
+        expYear: 2030,
+        cvc: '123',
+      },
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.amount).toBe(1000);
+  });
+});
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use MockAdapter" icon="mask">
+    Test payment flows without hitting real APIs. Use scenarios to test different outcomes.
+  </Card>
+  <Card title="Validate Responses" icon="check-double">
+    Use compliance harness to ensure adapters return correctly structured data.
+  </Card>
+  <Card title="Test Webhooks" icon="webhook">
+    Use webhook helpers to generate properly signed payloads for webhook handler tests.
+  </Card>
+  <Card title="Mock HTTP" icon="network-wired">
+    Provide custom `fetchFn` to adapters during tests to avoid real network calls.
+  </Card>
+</CardGroup>
+
+## API Reference
+
+See the testing utilities source code:
+
+- **MockAdapter**: `/home/daytona/workspace/source/src/testing/mock-adapter.ts:118`
+- **Compliance Harness**: `/home/daytona/workspace/source/src/testing/adapter-compliance.ts:520`
+- **Webhook Helpers**: `/home/daytona/workspace/source/src/testing/webhook-helper.ts:32`

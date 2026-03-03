@@ -1,0 +1,579 @@
+---
+title: Configuration
+description: Configuration options for VaultClient initialization
+---
+
+## Overview
+
+The `VaultConfig` interface defines all configuration options accepted by `new VaultClient(config)`. Configuration is validated on construction and will throw `VaultConfigError` if invalid.
+
+## VaultConfig
+
+Root configuration object for VaultClient.
+
+```typescript
+interface VaultConfig {
+  providers: Record<string, ProviderConfig>;
+  routing?: {
+    rules: RoutingRule[];
+  };
+  idempotency?: {
+    store?: IdempotencyStore;
+    ttlMs?: number;
+  };
+  platformApiKey?: string;
+  platform?: {
+    baseUrl?: string;
+    timeoutMs?: number;
+    batchSize?: number;
+    flushIntervalMs?: number;
+    maxRetries?: number;
+    initialBackoffMs?: number;
+  };
+  logging?: {
+    level?: 'silent' | 'error' | 'warn' | 'info' | 'debug';
+    logger?: LoggerInterface;
+  };
+  timeout?: number;
+}
+```
+
+### providers
+
+<ParamField path="providers" type="Record<string, ProviderConfig>" required>
+  Map of provider names to their configurations. At least one enabled provider is required.
+  
+  <Expandable title="ProviderConfig properties">
+    <ParamField path="adapter" type="PaymentAdapterConstructor" required>
+      The adapter class to use for this provider (e.g., `StripeAdapter`, `DLocalAdapter`)
+    </ParamField>
+    
+    <ParamField path="config" type="Record<string, unknown>" required>
+      Provider-specific configuration object (e.g., API keys, credentials)
+    </ParamField>
+    
+    <ParamField path="priority" type="number">
+      Provider priority for fallback routing. Lower numbers have higher priority. Default: `0`
+    </ParamField>
+    
+    <ParamField path="enabled" type="boolean">
+      Whether this provider is enabled. Default: `true`
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+#### Example
+
+```typescript
+import { VaultClient, StripeAdapter, DLocalAdapter } from '@vaultsaas/core';
+
+const client = new VaultClient({
+  providers: {
+    stripe: {
+      adapter: StripeAdapter,
+      config: {
+        apiKey: process.env.STRIPE_API_KEY,
+      },
+      priority: 0,
+    },
+    dlocal: {
+      adapter: DLocalAdapter,
+      config: {
+        apiKey: process.env.DLOCAL_API_KEY,
+        apiSecret: process.env.DLOCAL_SECRET,
+      },
+      priority: 1,
+    },
+  },
+  routing: {
+    rules: [{ match: { default: true }, provider: 'stripe' }],
+  },
+});
+```
+
+---
+
+### routing
+
+<ParamField path="routing" type="object">
+  Local routing configuration. Optional if using platform routing.
+  
+  <Expandable title="routing properties">
+    <ParamField path="rules" type="RoutingRule[]" required>
+      Array of routing rules evaluated in order. Must include at least one default rule.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+#### RoutingRule
+
+Each routing rule matches transaction attributes and routes to a specific provider.
+
+```typescript
+interface RoutingRule {
+  match: {
+    currency?: string | string[];
+    country?: string | string[];
+    paymentMethod?: string | string[];
+    amountMin?: number;
+    amountMax?: number;
+    metadata?: Record<string, string>;
+    default?: boolean;
+  };
+  provider: string;
+  weight?: number;
+}
+```
+
+<ParamField path="match" type="object" required>
+  Conditions that must be met for this rule to apply
+  
+  <Expandable title="match properties">
+    <ParamField path="currency" type="string | string[]">
+      Match transactions with this currency (e.g., "USD", ["USD", "EUR"])
+    </ParamField>
+    
+    <ParamField path="country" type="string | string[]">
+      Match transactions from this country (e.g., "BR", ["BR", "AR"])
+    </ParamField>
+    
+    <ParamField path="paymentMethod" type="string | string[]">
+      Match transactions with this payment method type (e.g., "card", ["pix", "boleto"])
+    </ParamField>
+    
+    <ParamField path="amountMin" type="number">
+      Minimum transaction amount (inclusive, in smallest currency unit)
+    </ParamField>
+    
+    <ParamField path="amountMax" type="number">
+      Maximum transaction amount (inclusive, in smallest currency unit)
+    </ParamField>
+    
+    <ParamField path="metadata" type="Record<string, string>">
+      Match transactions with these metadata key-value pairs
+    </ParamField>
+    
+    <ParamField path="default" type="boolean">
+      If `true`, this rule matches all transactions (fallback rule). Required for at least one rule.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="provider" type="string" required>
+  The provider name to route to (must match a key in `config.providers`)
+</ParamField>
+
+<ParamField path="weight" type="number">
+  Weight for probabilistic routing among multiple matching rules. Higher weights increase selection probability.
+</ParamField>
+
+#### Routing Examples
+
+```typescript
+const config: VaultConfig = {
+  providers: {
+    stripe: { /* ... */ },
+    dlocal: { /* ... */ },
+    paystack: { /* ... */ },
+  },
+  routing: {
+    rules: [
+      // Route Brazilian PIX to DLocal
+      {
+        match: { currency: 'BRL', paymentMethod: 'pix' },
+        provider: 'dlocal',
+      },
+      // Route Nigerian transactions to Paystack
+      {
+        match: { country: 'NG' },
+        provider: 'paystack',
+      },
+      // Route high-value USD transactions to Stripe
+      {
+        match: { currency: 'USD', amountMin: 100000 }, // $1000+
+        provider: 'stripe',
+      },
+      // Load-balance remaining USD between Stripe (70%) and DLocal (30%)
+      {
+        match: { currency: 'USD' },
+        provider: 'stripe',
+        weight: 70,
+      },
+      {
+        match: { currency: 'USD' },
+        provider: 'dlocal',
+        weight: 30,
+      },
+      // Default fallback to Stripe
+      {
+        match: { default: true },
+        provider: 'stripe',
+      },
+    ],
+  },
+};
+```
+
+---
+
+### idempotency
+
+<ParamField path="idempotency" type="object">
+  Idempotency configuration for preventing duplicate operations
+  
+  <Expandable title="idempotency properties">
+    <ParamField path="store" type="IdempotencyStore">
+      Custom idempotency store implementation. Default: `MemoryIdempotencyStore` (in-memory, not suitable for production)
+    </ParamField>
+    
+    <ParamField path="ttlMs" type="number">
+      Time-to-live for idempotency records in milliseconds. Default: `86400000` (24 hours)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+#### IdempotencyStore Interface
+
+Custom idempotency stores must implement:
+
+```typescript
+interface IdempotencyStore {
+  get(key: string): Promise<IdempotencyRecord | null>;
+  set(record: IdempotencyRecord): Promise<void>;
+  delete(key: string): Promise<void>;
+  clearExpired(): Promise<void>;
+}
+
+interface IdempotencyRecord {
+  key: string;
+  payloadHash: string;
+  result: unknown;
+  expiresAt: number;
+}
+```
+
+#### Example with Redis Store
+
+```typescript
+import { VaultClient } from '@vaultsaas/core';
+import { RedisIdempotencyStore } from '@vaultsaas/redis';
+import Redis from 'ioredis';
+
+const redis = new Redis({
+  host: 'localhost',
+  port: 6379,
+});
+
+const client = new VaultClient({
+  providers: { /* ... */ },
+  idempotency: {
+    store: new RedisIdempotencyStore(redis),
+    ttlMs: 86400000, // 24 hours
+  },
+});
+```
+
+---
+
+### platformApiKey
+
+<ParamField path="platformApiKey" type="string">
+  API key for VaultSaaS platform integration. Enables platform routing, analytics, and monitoring.
+</ParamField>
+
+#### Example
+
+```typescript
+const client = new VaultClient({
+  providers: { /* ... */ },
+  platformApiKey: process.env.VAULTSAAS_API_KEY,
+});
+```
+
+---
+
+### platform
+
+<ParamField path="platform" type="object">
+  Advanced platform connector configuration. Only relevant when `platformApiKey` is set.
+  
+  <Expandable title="platform properties">
+    <ParamField path="baseUrl" type="string">
+      Platform API base URL. Default: `https://api.vaultsaas.com`
+    </ParamField>
+    
+    <ParamField path="timeoutMs" type="number">
+      Request timeout in milliseconds. Default: `5000` (5 seconds)
+    </ParamField>
+    
+    <ParamField path="batchSize" type="number">
+      Maximum number of events to batch before flushing. Default: `100`
+    </ParamField>
+    
+    <ParamField path="flushIntervalMs" type="number">
+      Interval in milliseconds to flush batched events. Default: `10000` (10 seconds)
+    </ParamField>
+    
+    <ParamField path="maxRetries" type="number">
+      Maximum number of retry attempts for failed requests. Default: `3`
+    </ParamField>
+    
+    <ParamField path="initialBackoffMs" type="number">
+      Initial backoff delay in milliseconds for retries. Default: `1000` (1 second)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+#### Example
+
+```typescript
+const client = new VaultClient({
+  providers: { /* ... */ },
+  platformApiKey: process.env.VAULTSAAS_API_KEY,
+  platform: {
+    timeoutMs: 3000,
+    batchSize: 50,
+    flushIntervalMs: 5000,
+    maxRetries: 5,
+  },
+});
+```
+
+---
+
+### logging
+
+<ParamField path="logging" type="object">
+  Logging configuration for SDK operations
+  
+  <Expandable title="logging properties">
+    <ParamField path="level" type="'silent' | 'error' | 'warn' | 'info' | 'debug'">
+      Logging level. Default: `'info'`
+    </ParamField>
+    
+    <ParamField path="logger" type="LoggerInterface">
+      Custom logger implementation. If not provided, logs are output to console.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+#### LoggerInterface
+
+Custom loggers must implement:
+
+```typescript
+interface LoggerInterface {
+  error(message: string, context?: Record<string, unknown>): void;
+  warn(message: string, context?: Record<string, unknown>): void;
+  info(message: string, context?: Record<string, unknown>): void;
+  debug(message: string, context?: Record<string, unknown>): void;
+}
+```
+
+#### Example with Winston
+
+```typescript
+import { VaultClient } from '@vaultsaas/core';
+import winston from 'winston';
+
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.json(),
+  transports: [
+    new winston.transports.File({ filename: 'vault.log' }),
+  ],
+});
+
+const client = new VaultClient({
+  providers: { /* ... */ },
+  logging: {
+    level: 'debug',
+    logger: {
+      error: (msg, ctx) => logger.error(msg, ctx),
+      warn: (msg, ctx) => logger.warn(msg, ctx),
+      info: (msg, ctx) => logger.info(msg, ctx),
+      debug: (msg, ctx) => logger.debug(msg, ctx),
+    },
+  },
+});
+```
+
+---
+
+### timeout
+
+<ParamField path="timeout" type="number">
+  Global timeout in milliseconds for all payment operations. Individual adapters may have their own timeouts.
+</ParamField>
+
+#### Example
+
+```typescript
+const client = new VaultClient({
+  providers: { /* ... */ },
+  timeout: 30000, // 30 seconds
+});
+```
+
+## Validation
+
+The SDK validates all configuration options on construction:
+
+### Required Fields
+
+- At least one provider must be configured
+- At least one provider must be enabled
+- Each provider must have a valid `adapter` constructor
+- Each provider must have a `config` object
+
+### Provider Validation
+
+- `adapter` must be a constructor function with static `supportedMethods`, `supportedCurrencies`, and `supportedCountries` arrays
+- `config` must be a plain object
+- `priority` must be an integer (if provided)
+- `enabled` must be a boolean (if provided)
+
+### Routing Validation
+
+- If `routing` is provided, `rules` must be a non-empty array
+- Each rule must have a `provider` that references an enabled provider
+- Each rule must have a `match` object
+- At least one rule must have `match.default: true`
+- `amountMin` and `amountMax` must be non-negative numbers
+- `amountMin` must not exceed `amountMax`
+- `weight` must be a positive number (if provided)
+
+### Idempotency Validation
+
+- `ttlMs` must be a positive integer (if provided)
+- `store` must implement all required methods: `get`, `set`, `delete`, `clearExpired`
+
+### Platform Validation
+
+- `platformApiKey` must not be empty (if provided)
+- `baseUrl` must not be empty (if provided)
+- `timeoutMs`, `batchSize`, `flushIntervalMs`, `maxRetries`, `initialBackoffMs` must all be positive integers (if provided)
+
+### Logging Validation
+
+- `level` must be one of: `'silent'`, `'error'`, `'warn'`, `'info'`, `'debug'`
+- `logger` must implement all required methods: `error`, `warn`, `info`, `debug`
+
+## Complete Example
+
+```typescript
+import { 
+  VaultClient, 
+  StripeAdapter, 
+  DLocalAdapter, 
+  PaystackAdapter 
+} from '@vaultsaas/core';
+import { RedisIdempotencyStore } from '@vaultsaas/redis';
+import Redis from 'ioredis';
+import winston from 'winston';
+
+const redis = new Redis();
+
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.json(),
+  transports: [
+    new winston.transports.Console(),
+    new winston.transports.File({ filename: 'vault.log' }),
+  ],
+});
+
+const client = new VaultClient({
+  // Provider configuration
+  providers: {
+    stripe: {
+      adapter: StripeAdapter,
+      config: {
+        apiKey: process.env.STRIPE_API_KEY!,
+      },
+      priority: 0,
+      enabled: true,
+    },
+    dlocal: {
+      adapter: DLocalAdapter,
+      config: {
+        apiKey: process.env.DLOCAL_API_KEY!,
+        apiSecret: process.env.DLOCAL_SECRET!,
+      },
+      priority: 1,
+      enabled: true,
+    },
+    paystack: {
+      adapter: PaystackAdapter,
+      config: {
+        secretKey: process.env.PAYSTACK_SECRET_KEY!,
+      },
+      priority: 2,
+      enabled: true,
+    },
+  },
+
+  // Routing rules
+  routing: {
+    rules: [
+      {
+        match: { currency: 'BRL', paymentMethod: 'pix' },
+        provider: 'dlocal',
+      },
+      {
+        match: { country: 'NG' },
+        provider: 'paystack',
+      },
+      {
+        match: { currency: 'USD' },
+        provider: 'stripe',
+      },
+      {
+        match: { default: true },
+        provider: 'stripe',
+      },
+    ],
+  },
+
+  // Idempotency with Redis
+  idempotency: {
+    store: new RedisIdempotencyStore(redis),
+    ttlMs: 86400000, // 24 hours
+  },
+
+  // Platform integration
+  platformApiKey: process.env.VAULTSAAS_API_KEY,
+  platform: {
+    timeoutMs: 5000,
+    batchSize: 100,
+    flushIntervalMs: 10000,
+    maxRetries: 3,
+    initialBackoffMs: 1000,
+  },
+
+  // Logging
+  logging: {
+    level: 'info',
+    logger: {
+      error: (msg, ctx) => logger.error(msg, ctx),
+      warn: (msg, ctx) => logger.warn(msg, ctx),
+      info: (msg, ctx) => logger.info(msg, ctx),
+      debug: (msg, ctx) => logger.debug(msg, ctx),
+    },
+  },
+
+  // Global timeout
+  timeout: 30000,
+});
+
+// Use the client
+const result = await client.charge({
+  amount: 5000,
+  currency: 'BRL',
+  paymentMethod: { type: 'pix' },
+  customer: {
+    email: 'customer@example.com',
+    document: '12345678900',
+  },
+});
+```

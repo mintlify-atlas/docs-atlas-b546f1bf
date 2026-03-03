@@ -1,0 +1,345 @@
+---
+title: 'authorize()'
+description: 'Hold funds on a payment method without capturing'
+icon: 'lock'
+---
+
+Authorize a payment by placing a hold on funds without immediately capturing them. This is useful for pre-authorizations in scenarios like hotel reservations or rental deposits. Use `capture()` to complete the payment later.
+
+## Method signature
+
+```typescript
+async authorize(request: AuthorizeRequest): Promise<PaymentResult>
+```
+
+## Parameters
+
+<Info>
+  `AuthorizeRequest` has an identical shape to `ChargeRequest`. The only difference is the operation type.
+</Info>
+
+<ParamField path="body.amount" type="number" required>
+  Amount to authorize in the smallest currency unit (e.g., cents for USD).
+</ParamField>
+
+<ParamField path="body.currency" type="string" required>
+  ISO 4217 currency code (e.g., `"USD"`, `"BRL"`, `"EUR"`).
+</ParamField>
+
+<ParamField path="body.paymentMethod" type="PaymentMethodInput" required>
+  Payment method information. Can be a tokenized card, raw card data, bank transfer, wallet, PIX, or boleto.
+  
+  <Expandable title="Payment method types" defaultOpen={false}>
+    <ResponseField name="card (tokenized)" type="object">
+      ```typescript
+      { type: 'card', token: string }
+      ```
+    </ResponseField>
+    
+    <ResponseField name="card (raw)" type="object">
+      ```typescript
+      {
+        type: 'card',
+        number: string,
+        expMonth: number,
+        expYear: number,
+        cvc: string
+      }
+      ```
+    </ResponseField>
+    
+    <ResponseField name="bank_transfer" type="object">
+      ```typescript
+      { type: 'bank_transfer', bankCode: string, accountNumber: string }
+      ```
+    </ResponseField>
+    
+    <ResponseField name="wallet" type="object">
+      ```typescript
+      { type: 'wallet', walletType: string, token: string }
+      ```
+    </ResponseField>
+    
+    <ResponseField name="pix" type="object">
+      ```typescript
+      { type: 'pix' }
+      ```
+    </ResponseField>
+    
+    <ResponseField name="boleto" type="object">
+      ```typescript
+      { type: 'boleto', customerDocument: string }
+      ```
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="body.customer" type="CustomerInput">
+  Customer billing and contact information.
+  
+  <Expandable title="Customer properties" defaultOpen={false}>
+    <ResponseField name="email" type="string">
+      Customer email address.
+    </ResponseField>
+    
+    <ResponseField name="name" type="string">
+      Customer full name.
+    </ResponseField>
+    
+    <ResponseField name="phone" type="string">
+      Customer phone number.
+    </ResponseField>
+    
+    <ResponseField name="document" type="string">
+      Tax ID or national document number (e.g., CPF in Brazil).
+    </ResponseField>
+    
+    <ResponseField name="address" type="AddressInput">
+      Customer billing or shipping address with fields: `line1`, `line2`, `city`, `state`, `postalCode`, `country` (ISO 3166-1 alpha-2).
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="body.description" type="string">
+  Human-readable description of the authorization.
+</ParamField>
+
+<ParamField path="body.metadata" type="object">
+  Arbitrary key-value pairs forwarded to the payment provider.
+</ParamField>
+
+<ParamField path="body.idempotencyKey" type="string">
+  Unique key to prevent duplicate authorizations when retrying the same request. If the same key is used with different request data, a `VaultIdempotencyConflictError` will be thrown.
+</ParamField>
+
+<ParamField path="body.routing" type="RoutingPreference">
+  Per-request routing overrides.
+  
+  <Expandable title="Routing properties" defaultOpen={false}>
+    <ResponseField name="provider" type="string">
+      Force routing to a specific provider, bypassing all routing rules.
+    </ResponseField>
+    
+    <ResponseField name="exclude" type="string[]">
+      Provider names to exclude from routing consideration.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+## Returns
+
+<ResponseField name="PaymentResult" type="object">
+  Normalized payment result with status `"authorized"` for successful authorizations.
+  
+  <Expandable title="properties" defaultOpen>
+    <ResponseField name="id" type="string" required>
+      VaultSaaS-normalized transaction identifier. Use this ID with `capture()` to complete the payment.
+    </ResponseField>
+    
+    <ResponseField name="status" type="PaymentStatus" required>
+      Payment status. Will be `"authorized"` for successful authorizations.
+    </ResponseField>
+    
+    <ResponseField name="provider" type="string" required>
+      Name of the provider that processed the authorization (e.g., `"stripe"`, `"adyen"`).
+    </ResponseField>
+    
+    <ResponseField name="providerId" type="string" required>
+      Provider's own identifier for this authorization.
+    </ResponseField>
+    
+    <ResponseField name="amount" type="number" required>
+      Authorized amount in smallest currency unit.
+    </ResponseField>
+    
+    <ResponseField name="currency" type="string" required>
+      ISO 4217 currency code.
+    </ResponseField>
+    
+    <ResponseField name="paymentMethod" type="object" required>
+      Snapshot of the payment method used.
+      
+      <Expandable title="properties">
+        <ResponseField name="type" type="string" required>
+          Payment method type.
+        </ResponseField>
+        
+        <ResponseField name="last4" type="string">
+          Last 4 digits of card or account number.
+        </ResponseField>
+        
+        <ResponseField name="brand" type="string">
+          Card brand (e.g., `"visa"`, `"mastercard"`).
+        </ResponseField>
+        
+        <ResponseField name="expiryMonth" type="number">
+          Card expiry month.
+        </ResponseField>
+        
+        <ResponseField name="expiryYear" type="number">
+          Card expiry year.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="customer" type="object">
+      Customer information returned by the provider.
+      
+      <Expandable title="properties">
+        <ResponseField name="id" type="string">
+          Provider's customer identifier.
+        </ResponseField>
+        
+        <ResponseField name="email" type="string">
+          Customer email address.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="metadata" type="object" required>
+      Merged metadata from the request and provider response.
+    </ResponseField>
+    
+    <ResponseField name="routing" type="object" required>
+      Information about how the provider was selected.
+      
+      <Expandable title="properties">
+        <ResponseField name="source" type="string" required>
+          Routing source: `"local"` or `"platform"`.
+        </ResponseField>
+        
+        <ResponseField name="reason" type="string" required>
+          Reason for provider selection.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="string" required>
+      ISO 8601 timestamp when the authorization was created.
+    </ResponseField>
+    
+    <ResponseField name="providerMetadata" type="object" required>
+      Raw provider-specific fields not mapped to the normalized schema.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Error handling
+
+The `authorize()` method may throw the following errors:
+
+<AccordionGroup>
+  <Accordion title="VaultIdempotencyConflictError">
+    Thrown when an idempotency key is reused with different request data.
+    
+    ```typescript
+    if (existingRecord.payloadHash !== payloadHash) {
+      throw new VaultIdempotencyConflictError(
+        'Idempotency key was reused with a different payload.',
+        { operation, key }
+      );
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="VaultRoutingError">
+    Thrown when no eligible provider is found or when routing configuration is invalid.
+  </Accordion>
+  
+  <Accordion title="Provider-specific errors">
+    Provider errors are caught and wrapped in VaultError instances with provider context.
+  </Accordion>
+</AccordionGroup>
+
+## Example
+
+<CodeGroup>
+
+```typescript Hotel reservation
+// Authorize $500 for hotel stay
+const authorization = await client.authorize({
+  amount: 50000,
+  currency: 'USD',
+  paymentMethod: {
+    type: 'card',
+    token: 'tok_visa'
+  },
+  customer: {
+    email: 'guest@example.com',
+    name: 'Jane Smith'
+  },
+  description: 'Hotel reservation - Room 305',
+  metadata: {
+    reservationId: 'res_789',
+    checkIn: '2026-03-15',
+    checkOut: '2026-03-18'
+  },
+  idempotencyKey: 'reservation-res_789'
+});
+
+console.log(authorization.id); // 'txn_auth_xyz'
+console.log(authorization.status); // 'authorized'
+
+// Later, capture the actual charge
+const capture = await client.capture({
+  transactionId: authorization.id,
+  amount: 45000 // Capture $450 (partial capture)
+});
+```
+
+```typescript Car rental deposit
+const authorization = await client.authorize({
+  amount: 100000, // $1000 deposit
+  currency: 'USD',
+  paymentMethod: {
+    type: 'card',
+    number: '4111111111111111',
+    expMonth: 8,
+    expYear: 2027,
+    cvc: '456'
+  },
+  customer: {
+    email: 'driver@example.com',
+    name: 'Bob Johnson',
+    phone: '+1-555-0123'
+  },
+  description: 'Car rental deposit',
+  idempotencyKey: 'rental-dep-12345'
+});
+```
+
+```typescript With routing preference
+const authorization = await client.authorize({
+  amount: 25000,
+  currency: 'EUR',
+  paymentMethod: {
+    type: 'card',
+    token: 'tok_mastercard'
+  },
+  routing: {
+    provider: 'adyen' // Use Adyen for this authorization
+  },
+  idempotencyKey: 'auth-eur-001'
+});
+```
+
+</CodeGroup>
+
+## Implementation details
+
+The authorize operation follows the same flow as `charge()` (`src/client/vault-client.ts:175-208`):
+
+1. Checks for idempotency key and returns cached result if the same request was made previously
+2. Resolves the appropriate payment provider using the same routing logic as charges
+3. Executes the authorization through the selected provider adapter
+4. Normalizes the provider response into a standard `PaymentResult` format
+5. Records the transaction in the provider index for future `capture()` or `void()` calls
+6. Queues transaction report to the platform for analytics
+
+<Warning>
+  Authorizations typically expire after 7 days, though this varies by provider. Capture the authorization before it expires or the funds will be automatically released. Use `void()` to explicitly release the hold.
+</Warning>
+
+<Tip>
+  Store the `authorization.id` to use with `capture()` for completing the payment or `void()` for canceling the authorization.
+</Tip>

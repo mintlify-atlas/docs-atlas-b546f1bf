@@ -1,0 +1,231 @@
+---
+title: 'refund()'
+description: 'Refund a completed transaction fully or partially'
+icon: 'arrow-rotate-left'
+---
+
+Refund a completed transaction (charge or capture) either fully or partially. Refunds are processed through the same provider that handled the original transaction.
+
+## Method signature
+
+```typescript
+async refund(request: RefundRequest): Promise<RefundResult>
+```
+
+## Parameters
+
+<ParamField path="body.transactionId" type="string" required>
+  The transaction ID of the original charge or capture to refund.
+</ParamField>
+
+<ParamField path="body.amount" type="number">
+  Partial refund amount in smallest currency unit. Omit to refund the full transaction amount.
+</ParamField>
+
+<ParamField path="body.reason" type="string">
+  Human-readable reason for the refund, forwarded to the payment provider.
+</ParamField>
+
+<ParamField path="body.idempotencyKey" type="string">
+  Unique key to prevent duplicate refunds when retrying the same request.
+</ParamField>
+
+## Returns
+
+<ResponseField name="RefundResult" type="object">
+  Normalized refund result containing refund details and status.
+  
+  <Expandable title="properties" defaultOpen>
+    <ResponseField name="id" type="string" required>
+      Unique refund identifier.
+    </ResponseField>
+    
+    <ResponseField name="transactionId" type="string" required>
+      The original transaction that was refunded.
+    </ResponseField>
+    
+    <ResponseField name="status" type="string" required>
+      Refund status: `"completed"`, `"pending"`, or `"failed"`.
+    </ResponseField>
+    
+    <ResponseField name="amount" type="number" required>
+      Refunded amount in smallest currency unit.
+    </ResponseField>
+    
+    <ResponseField name="currency" type="string" required>
+      ISO 4217 currency code.
+    </ResponseField>
+    
+    <ResponseField name="provider" type="string" required>
+      Name of the provider that processed the refund (same as original transaction).
+    </ResponseField>
+    
+    <ResponseField name="providerId" type="string" required>
+      Provider's own identifier for this refund.
+    </ResponseField>
+    
+    <ResponseField name="reason" type="string">
+      Reason for the refund, if provided.
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="string" required>
+      ISO 8601 timestamp when the refund was created.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Error handling
+
+The `refund()` method may throw the following errors:
+
+<AccordionGroup>
+  <Accordion title="VaultIdempotencyConflictError">
+    Thrown when an idempotency key is reused with different request data.
+  </Accordion>
+  
+  <Accordion title="VaultRoutingError">
+    Thrown when the provider for the original transaction cannot be found.
+  </Accordion>
+  
+  <Accordion title="Provider-specific errors">
+    The provider may return errors such as:
+    - Transaction not found
+    - Transaction not refundable (e.g., already fully refunded)
+    - Refund amount exceeds original transaction amount
+    - Refund window expired
+  </Accordion>
+</AccordionGroup>
+
+## Example
+
+<CodeGroup>
+
+```typescript Full refund
+// Charge customer
+const charge = await client.charge({
+  amount: 5000,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'tok_visa' },
+  idempotencyKey: 'order-123'
+});
+
+// Customer requests refund
+const refund = await client.refund({
+  transactionId: charge.id,
+  reason: 'Customer requested cancellation',
+  idempotencyKey: 'refund-order-123'
+});
+
+console.log(refund.status); // 'completed' or 'pending'
+console.log(refund.amount); // 5000
+```
+
+```typescript Partial refund
+const charge = await client.charge({
+  amount: 10000,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'tok_visa' },
+  description: 'Order with 3 items'
+});
+
+// Refund one item ($30 out of $100)
+const refund = await client.refund({
+  transactionId: charge.id,
+  amount: 3000,
+  reason: 'Item out of stock',
+  idempotencyKey: 'refund-item-1'
+});
+
+console.log(refund.amount); // 3000
+// Remaining $70 stays captured
+```
+
+```typescript Multiple partial refunds
+const charge = await client.charge({
+  amount: 15000,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'tok_visa' }
+});
+
+// First refund
+const refund1 = await client.refund({
+  transactionId: charge.id,
+  amount: 5000,
+  reason: 'Damaged item',
+  idempotencyKey: 'refund-1'
+});
+
+// Second refund
+const refund2 = await client.refund({
+  transactionId: charge.id,
+  amount: 3000,
+  reason: 'Shipping delay compensation',
+  idempotencyKey: 'refund-2'
+});
+
+// Total refunded: $80, remaining charge: $70
+```
+
+```typescript With error handling
+try {
+  const refund = await client.refund({
+    transactionId: 'txn_xyz123',
+    amount: 2500,
+    reason: 'Product defect'
+  });
+  
+  if (refund.status === 'pending') {
+    console.log('Refund initiated, will complete in 5-10 business days');
+  }
+} catch (error) {
+  if (error.code === 'ROUTING_PROVIDER_UNAVAILABLE') {
+    console.error('Provider not found for transaction');
+  } else if (error.message.includes('already refunded')) {
+    console.error('Transaction already fully refunded');
+  } else {
+    console.error('Refund failed:', error.message);
+  }
+}
+```
+
+</CodeGroup>
+
+## Implementation details
+
+The refund operation (`src/client/vault-client.ts:247-272`):
+
+1. Looks up the provider that handled the original transaction using the transaction index
+2. Executes the refund through the provider adapter
+3. Returns a `RefundResult` with refund details (not a full `PaymentResult`)
+4. Queues transaction report to the platform for analytics
+
+<Info>
+  Refunds are processed through the same provider that handled the original transaction. You cannot refund a Stripe charge through Adyen, for example.
+</Info>
+
+<Warning>
+  Refund timing varies by provider and payment method:
+  - Card refunds typically take 5-10 business days to appear in the customer's account
+  - Some providers process refunds instantly
+  - Refund status may be `"pending"` initially and update to `"completed"` later
+</Warning>
+
+<Tip>
+  Use partial refunds for price adjustments, damaged goods, or promotional credits without refunding the entire order.
+</Tip>
+
+## Refund status lifecycle
+
+<Steps>
+  <Step title="Refund initiated">
+    Status is `"pending"` when the refund request is submitted to the provider.
+  </Step>
+  
+  <Step title="Provider processing">
+    The payment provider processes the refund and initiates the transfer back to the customer.
+  </Step>
+  
+  <Step title="Refund completed">
+    Status changes to `"completed"` when the provider confirms the refund. Funds may still take additional days to reach the customer's account.
+  </Step>
+</Steps>

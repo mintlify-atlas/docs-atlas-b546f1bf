@@ -1,0 +1,472 @@
+---
+title: Error Handling
+description: Understand VaultSaaS error types and handling strategies
+---
+
+All SDK failures are thrown as `VaultError` or its subclasses, providing consistent error handling across all payment providers.
+
+## Error Shape
+
+Every `VaultError` includes comprehensive error information:
+
+```typescript VaultError Structure
+class VaultError extends Error {
+  readonly code: string;           // Machine-readable error code
+  readonly category: string;       // Error category
+  readonly suggestion: string;     // Actionable suggestion
+  readonly docsUrl: string;        // Documentation URL
+  readonly retriable: boolean;     // Whether retry is recommended
+  readonly context: VaultErrorContext; // Error context
+}
+```
+
+### Error Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `code` | `string` | Machine-readable error code (e.g., `CARD_DECLINED`) |
+| `category` | `VaultErrorCategory` | Error category for grouping |
+| `suggestion` | `string` | Human-readable suggestion for resolution |
+| `docsUrl` | `string` | Link to relevant documentation |
+| `retriable` | `boolean` | Whether the operation can be safely retried |
+| `context` | `VaultErrorContext` | Additional context (provider, operation, etc.) |
+
+### Context Object
+
+```typescript src/errors/vault-error.ts:7
+export interface VaultErrorContext {
+  provider?: string;
+  operation?: string;
+  requestId?: string;
+  providerCode?: string;
+  providerMessage?: string;
+  [key: string]: unknown;
+}
+```
+
+## Error Subclasses
+
+The SDK provides specialized error classes for different failure scenarios:
+
+### VaultConfigError
+
+Thrown when configuration is invalid:
+
+```typescript
+import { VaultConfigError } from '@vaultsaas/core';
+
+try {
+  const vault = new VaultClient({
+    providers: {},  // No providers!
+    routing: { rules: [] },
+  });
+} catch (error) {
+  if (error instanceof VaultConfigError) {
+    console.error(error.code); // "INVALID_CONFIGURATION"
+    console.error(error.suggestion);
+  }
+}
+```
+
+### VaultRoutingError
+
+Thrown when routing fails:
+
+```typescript
+import { VaultRoutingError } from '@vaultsaas/core';
+
+try {
+  await vault.charge({
+    amount: 2500,
+    currency: 'USD',
+    paymentMethod: { type: 'card', token: 'pm_card_visa' },
+    routing: {
+      provider: 'nonexistent',
+    },
+  });
+} catch (error) {
+  if (error instanceof VaultRoutingError) {
+    console.error(error.code); // "ROUTING_PROVIDER_UNAVAILABLE"
+    console.error(error.context.provider); // "nonexistent"
+  }
+}
+```
+
+### VaultProviderError
+
+Thrown when provider API calls fail:
+
+```typescript
+import { VaultProviderError } from '@vaultsaas/core';
+
+try {
+  await vault.charge({
+    amount: 2500,
+    currency: 'USD',
+    paymentMethod: {
+      type: 'card',
+      number: '4000000000000002', // Stripe test card for decline
+      expMonth: 12,
+      expYear: 2030,
+      cvc: '123',
+    },
+  });
+} catch (error) {
+  if (error instanceof VaultProviderError) {
+    console.error(error.code); // "CARD_DECLINED"
+    console.error(error.context.provider); // "stripe"
+    console.error(error.context.providerCode); // "card_declined"
+  }
+}
+```
+
+### VaultNetworkError
+
+Thrown when network failures occur:
+
+```typescript
+import { VaultNetworkError } from '@vaultsaas/core';
+
+try {
+  await vault.charge(request);
+} catch (error) {
+  if (error instanceof VaultNetworkError) {
+    console.error(error.code); // "NETWORK_ERROR"
+    console.error(error.retriable); // true
+    
+    if (error.retriable) {
+      // Queue for retry with exponential backoff
+    }
+  }
+}
+```
+
+### WebhookVerificationError
+
+Thrown when webhook signature verification fails:
+
+```typescript
+import { WebhookVerificationError } from '@vaultsaas/core';
+
+try {
+  const event = await vault.handleWebhook(
+    'stripe',
+    payload,
+    { 'stripe-signature': 'invalid' }
+  );
+} catch (error) {
+  if (error instanceof WebhookVerificationError) {
+    console.error(error.code); // "WEBHOOK_SIGNATURE_INVALID"
+    // Return 400 to provider
+  }
+}
+```
+
+### VaultIdempotencyConflictError
+
+Thrown when idempotency key is reused with different payload:
+
+```typescript
+import { VaultIdempotencyConflictError } from '@vaultsaas/core';
+
+try {
+  await vault.charge({
+    amount: 3000, // Different from original
+    currency: 'USD',
+    paymentMethod: { type: 'card', token: 'pm_card_visa' },
+    idempotencyKey: 'order-1001', // Same key
+  });
+} catch (error) {
+  if (error instanceof VaultIdempotencyConflictError) {
+    console.error(error.code); // "IDEMPOTENCY_CONFLICT"
+    console.error(error.suggestion);
+    // "Use a unique idempotency key for different request payloads"
+  }
+}
+```
+
+## Complete Error Handling Example
+
+```typescript
+import { StripeAdapter, VaultClient, VaultError } from '@vaultsaas/core';
+
+function mustEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing env var: ${name}`);
+  return value;
+}
+
+const vault = new VaultClient({
+  providers: {
+    stripe: {
+      adapter: StripeAdapter,
+      config: { apiKey: mustEnv('STRIPE_API_KEY') },
+    },
+  },
+  routing: {
+    rules: [{ match: { default: true }, provider: 'stripe' }],
+  },
+});
+
+try {
+  await vault.charge({
+    amount: 2500,
+    currency: 'USD',
+    paymentMethod: {
+      type: 'card',
+      number: '4000000000000002', // Common Stripe decline test card
+      expMonth: 12,
+      expYear: 2030,
+      cvc: '123',
+    },
+    customer: {
+      email: 'buyer@example.com',
+    },
+  });
+} catch (error) {
+  if (error instanceof VaultError) {
+    console.error('Vault error', {
+      code: error.code,
+      category: error.category,
+      retriable: error.retriable,
+      suggestion: error.suggestion,
+      docsUrl: error.docsUrl,
+      context: error.context,
+    });
+
+    if (error.retriable) {
+      // Queue retry with exponential backoff
+    } else {
+      // Show actionable failure to caller
+    }
+  } else {
+    throw error;
+  }
+}
+```
+
+## Error Categories
+
+Errors are grouped into categories for easier handling:
+
+<CodeGroup>
+```typescript Category Types
+type VaultErrorCategory =
+  | 'configuration'
+  | 'validation'
+  | 'routing'
+  | 'authentication'
+  | 'authorization'
+  | 'card_error'
+  | 'network_error'
+  | 'provider_error'
+  | 'rate_limit'
+  | 'idempotency'
+  | 'unknown';
+```
+
+```typescript Category-Based Handling
+try {
+  await vault.charge(request);
+} catch (error) {
+  if (error instanceof VaultError) {
+    switch (error.category) {
+      case 'card_error':
+        // Show card error to user
+        return { error: 'Card declined. Please try another card.' };
+      
+      case 'network_error':
+      case 'rate_limit':
+        // Retry with backoff
+        await retryWithBackoff(() => vault.charge(request));
+        break;
+      
+      case 'authentication':
+      case 'authorization':
+        // Log and alert - configuration issue
+        logger.critical('Payment provider auth failed', { error });
+        break;
+      
+      default:
+        // Generic error handling
+        return { error: 'Payment failed. Please try again.' };
+    }
+  }
+}
+```
+</CodeGroup>
+
+## Provider Error Mapping
+
+The SDK normalizes provider-specific errors into canonical codes:
+
+```typescript src/client/vault-client.ts:636
+private async wrapProviderCall<T>(
+  provider: string,
+  operation: string,
+  execute: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await execute();
+  } catch (error) {
+    if (error instanceof VaultError) {
+      throw error;
+    }
+
+    throw mapProviderError(error, {
+      provider,
+      operation,
+    });
+  }
+}
+```
+
+<Info>
+Provider-specific error codes and messages are preserved in `context.providerCode` and `context.providerMessage` for debugging.
+</Info>
+
+## Recommended Handling Strategy
+
+<Tabs>
+  <Tab title="Logging">
+    Log essential error information:
+
+    ```typescript
+    if (error instanceof VaultError) {
+      logger.error('Payment operation failed', {
+        code: error.code,
+        category: error.category,
+        provider: error.context.provider,
+        operation: error.context.operation,
+        retriable: error.retriable,
+      });
+    }
+    ```
+  </Tab>
+
+  <Tab title="Retry Logic">
+    Only retry when `retriable === true`:
+
+    ```typescript
+    async function retryWithBackoff<T>(
+      operation: () => Promise<T>,
+      maxRetries = 3,
+    ): Promise<T> {
+      let lastError: Error;
+      
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          return await operation();
+        } catch (error) {
+          lastError = error;
+          
+          if (error instanceof VaultError && !error.retriable) {
+            throw error; // Don't retry non-retriable errors
+          }
+          
+          const delay = Math.pow(2, attempt) * 1000;
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+      
+      throw lastError!;
+    }
+    ```
+  </Tab>
+
+  <Tab title="User Messaging">
+    Return safe, actionable messages:
+
+    ```typescript
+    function getUserMessage(error: VaultError): string {
+      switch (error.code) {
+        case 'CARD_DECLINED':
+          return 'Your card was declined. Please try another payment method.';
+        
+        case 'INSUFFICIENT_FUNDS':
+          return 'Insufficient funds. Please try another card.';
+        
+        case 'EXPIRED_CARD':
+          return 'Your card has expired. Please use a valid card.';
+        
+        case 'INVALID_CARD_NUMBER':
+          return 'Invalid card number. Please check and try again.';
+        
+        default:
+          return 'Payment failed. Please try again or contact support.';
+      }
+    }
+    ```
+  </Tab>
+
+  <Tab title="Monitoring">
+    Track error frequency for routing optimization:
+
+    ```typescript
+    const errorMetrics = {
+      'stripe.card_declined': 0,
+      'dlocal.timeout': 0,
+      // ...
+    };
+
+    if (error instanceof VaultError) {
+      const key = `${error.context.provider}.${error.code}`;
+      errorMetrics[key] = (errorMetrics[key] || 0) + 1;
+      
+      // If error rate is high, adjust routing
+      if (errorMetrics[key] > threshold) {
+        adjustRouting(error.context.provider);
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Best Practices
+
+<Tip>
+**Always check `retriable` before retrying**
+
+Retrying non-retriable errors wastes resources and may make things worse.
+</Tip>
+
+<Tip>
+**Log provider context for debugging**
+
+```typescript
+logger.error('Payment failed', {
+  provider: error.context.provider,
+  providerCode: error.context.providerCode,
+  providerMessage: error.context.providerMessage,
+});
+```
+</Tip>
+
+<Tip>
+**Use error categories for grouping**
+
+Handle similar errors together instead of checking individual codes.
+</Tip>
+
+<Warning>
+**Never expose provider error messages to users**
+
+Use `error.suggestion` or custom user-friendly messages instead.
+</Warning>
+
+<Tip>
+**Monitor high-frequency error codes**
+
+Track error rates by provider and add routing fallbacks where needed.
+</Tip>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Learn about error mapping
+  </Card>
+  <Card title="Idempotency" icon="repeat" href="/concepts/idempotency">
+    Handle idempotency conflicts
+  </Card>
+</CardGroup>

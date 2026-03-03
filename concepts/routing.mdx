@@ -1,0 +1,355 @@
+---
+title: Routing
+description: Configure intelligent payment routing across multiple providers
+---
+
+Routing rules are evaluated top-to-bottom. The first matching rule wins unless that rule is part of a weighted group.
+
+## Match Fields
+
+Each routing rule can match on multiple criteria:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `currency` | `string \| string[]` | ISO currency code (e.g., "USD", "EUR") |
+| `country` | `string \| string[]` | ISO country code (e.g., "US", "BR") |
+| `paymentMethod` | `string \| string[]` | Payment method type (e.g., "card", "pix", "boleto") |
+| `amountMin` | `number` | Minimum transaction amount in cents |
+| `amountMax` | `number` | Maximum transaction amount in cents |
+| `metadata` | `Record<string, string>` | Exact key/value pairs from request metadata |
+| `default` | `boolean` | Fallback rule (required - at least one) |
+
+<Warning>
+VaultClient validates that routing configuration contains at least one default fallback rule. Initialization will fail without one.
+</Warning>
+
+## Rule Evaluation
+
+The Router evaluates rules sequentially:
+
+```typescript src/router/router.ts:44
+decide(context: RoutingContext): RoutingDecision | null {
+  // Check for provider override first
+  if (context.providerOverride) {
+    // ...
+  }
+
+  // Iterate through rules top-to-bottom
+  for (let index = 0; index < this.rules.length; index += 1) {
+    const rule = this.rules[index];
+    
+    // Skip excluded providers
+    if (context.exclude?.includes(rule.provider)) {
+      continue;
+    }
+
+    // Check if rule matches context
+    if (!ruleMatchesContext(rule, context)) {
+      continue;
+    }
+
+    // Validate provider capabilities
+    if (!this.providerSupportsContext(rule.provider, context)) {
+      continue;
+    }
+
+    // Handle weighted selection if applicable
+    if (rule.weight !== undefined) {
+      // ...
+    }
+
+    return {
+      provider: rule.provider,
+      reason: this.buildRuleReason(rule, index),
+      rule,
+    };
+  }
+
+  return null;
+}
+```
+
+## Weighted Selection
+
+If a matching rule has a `weight` property, the router builds a contiguous weighted group starting at that rule and selects one provider proportionally.
+
+<CodeGroup>
+```typescript Weighted Rules
+const vault = new VaultClient({
+  providers: {
+    stripe: { adapter: StripeAdapter, config: { /*...*/ } },
+    dlocal: { adapter: DLocalAdapter, config: { /*...*/ } },
+  },
+  routing: {
+    rules: [
+      {
+        provider: 'stripe',
+        weight: 70,
+        match: {
+          currency: 'USD',
+          paymentMethod: 'card',
+        },
+      },
+      {
+        provider: 'dlocal',
+        weight: 30,
+        match: {
+          currency: 'USD',
+          paymentMethod: 'card',
+        },
+      },
+      {
+        provider: 'stripe',
+        match: { default: true },
+      },
+    ],
+  },
+});
+```
+
+```typescript Result Distribution
+// For USD card transactions:
+// - 70% routed to Stripe
+// - 30% routed to dLocal
+
+const result = await vault.charge({
+  amount: 2500,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'pm_card_visa' },
+});
+
+console.log(result.routing.reason);
+// "weighted selection chose provider stripe from 2 candidates starting at index 0"
+```
+</CodeGroup>
+
+<Info>
+Weighted groups are contiguous. The router stops collecting candidates when it encounters a rule with a different match criteria or no weight.
+</Info>
+
+## Per-Request Controls
+
+You can override routing behavior for individual requests:
+
+### Force Specific Provider
+
+```typescript Force Provider
+const result = await vault.charge({
+  amount: 2500,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'pm_card_visa' },
+  routing: {
+    provider: 'stripe', // Force Stripe
+  },
+});
+```
+
+### Exclude Providers
+
+```typescript Exclude Providers
+const result = await vault.charge({
+  amount: 2500,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'pm_card_visa' },
+  routing: {
+    exclude: ['dlocal'], // Don't use dLocal
+  },
+});
+```
+
+<Warning>
+If a forced provider is also in the exclusion list, the SDK throws `VaultRoutingError` with code `ROUTING_PROVIDER_EXCLUDED`.
+</Warning>
+
+## Provider Capability Validation
+
+The router automatically validates that the selected provider supports the request:
+
+```typescript src/router/router.ts:109
+private providerSupportsContext(
+  provider: string,
+  context: RoutingContext,
+): boolean {
+  const meta = this.adapterMetadata[provider];
+  if (!meta) {
+    return true;
+  }
+
+  // Check payment method support
+  if (
+    context.paymentMethod &&
+    meta.supportedMethods.length > 0 &&
+    !meta.supportedMethods.includes(context.paymentMethod)
+  ) {
+    this.logger?.warn(
+      `Provider "${provider}" does not support payment method "${context.paymentMethod}". Skipping.`
+    );
+    return false;
+  }
+
+  // Check currency support
+  if (
+    context.currency &&
+    meta.supportedCurrencies.length > 0 &&
+    !meta.supportedCurrencies.includes(context.currency)
+  ) {
+    this.logger?.warn(
+      `Provider "${provider}" does not support currency "${context.currency}". Skipping.`
+    );
+    return false;
+  }
+
+  // Check country support
+  if (
+    context.country &&
+    meta.supportedCountries.length > 0 &&
+    !meta.supportedCountries.includes(context.country)
+  ) {
+    this.logger?.warn(
+      `Provider "${provider}" does not support country "${context.country}". Skipping.`
+    );
+    return false;
+  }
+
+  return true;
+}
+```
+
+<Tip>
+Enable logging to see when providers are skipped due to capability mismatches:
+
+```typescript
+const vault = new VaultClient({
+  // ...
+  logging: {
+    level: 'warn',
+    logger: customLogger,
+  },
+});
+```
+</Tip>
+
+## Complete Example
+
+```typescript Multi-Provider Routing
+import {
+  DLocalAdapter,
+  StripeAdapter,
+  VaultClient,
+  type ChargeRequest,
+} from '@vaultsaas/core';
+
+function mustEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing env var: ${name}`);
+  return value;
+}
+
+const vault = new VaultClient({
+  providers: {
+    dlocal: {
+      adapter: DLocalAdapter,
+      config: {
+        xLogin: mustEnv('DLOCAL_X_LOGIN'),
+        xTransKey: mustEnv('DLOCAL_X_TRANS_KEY'),
+        secretKey: mustEnv('DLOCAL_SECRET_KEY'),
+      },
+      priority: 1,
+    },
+    stripe: {
+      adapter: StripeAdapter,
+      config: {
+        apiKey: mustEnv('STRIPE_API_KEY'),
+      },
+      priority: 2,
+    },
+  },
+  routing: {
+    rules: [
+      {
+        provider: 'dlocal',
+        match: {
+          country: 'BR',
+          paymentMethod: ['pix', 'boleto'],
+        },
+      },
+      {
+        provider: 'dlocal',
+        weight: 30,
+        match: {
+          currency: 'USD',
+          paymentMethod: 'card',
+        },
+      },
+      {
+        provider: 'stripe',
+        weight: 70,
+        match: {
+          currency: 'USD',
+          paymentMethod: 'card',
+        },
+      },
+      {
+        provider: 'stripe',
+        match: { default: true },
+      },
+    ],
+  },
+});
+
+const request: ChargeRequest = {
+  amount: 4200,
+  currency: 'USD',
+  paymentMethod: {
+    type: 'card',
+    token: 'pm_card_visa',
+  },
+  customer: {
+    email: 'buyer@example.com',
+    address: {
+      line1: '100 Market St',
+      city: 'San Francisco',
+      postalCode: '94105',
+      country: 'US',
+    },
+  },
+  metadata: {
+    merchantSegment: 'enterprise',
+  },
+  routing: {
+    exclude: ['dlocal'],
+  },
+};
+
+const result = await vault.charge(request);
+console.log(result.provider, result.routing.reason);
+// "stripe" "rule matched at index 2 using currency, paymentMethod"
+```
+
+## Routing Decision Details
+
+Every payment result includes routing information:
+
+```typescript
+interface PaymentResult {
+  // ...
+  routing: {
+    source: 'local' | 'platform';
+    reason: string;
+  };
+}
+```
+
+- **source**: Whether the decision came from local rules or platform API
+- **reason**: Human-readable explanation of why this provider was selected
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand the routing component
+  </Card>
+  <Card title="Error Handling" icon="exclamation-triangle" href="/concepts/error-handling">
+    Handle routing errors
+  </Card>
+</CardGroup>

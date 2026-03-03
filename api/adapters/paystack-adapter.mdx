@@ -1,0 +1,365 @@
+---
+title: 'PaystackAdapter'
+description: 'Paystack payment adapter for African markets'
+icon: 'layer-group'
+---
+
+## Overview
+
+The `PaystackAdapter` implements the `PaymentAdapter` interface to process payments through Paystack's API. It specializes in African payment methods including cards, bank transfers, and mobile money wallets across Nigeria, Ghana, South Africa, and Kenya.
+
+## Class Signature
+
+```typescript
+class PaystackAdapter implements PaymentAdapter {
+  readonly name = 'paystack';
+  static readonly supportedMethods = ['card', 'bank_transfer', 'wallet'] as const;
+  static readonly supportedCurrencies = ['NGN', 'GHS', 'ZAR', 'KES', 'USD'] as const;
+  static readonly supportedCountries = ['NG', 'GH', 'ZA', 'KE'] as const;
+  readonly metadata: AdapterMetadata;
+  
+  constructor(config: Record<string, unknown>);
+}
+```
+
+## Constructor
+
+```typescript
+new PaystackAdapter(config: Record<string, unknown>)
+```
+
+### Configuration
+
+<ParamField path="secretKey" type="string" required>
+  Paystack secret key (starts with `sk_test_` or `sk_live_`).
+  
+  **Required.** Throws `VaultConfigError` if not provided.
+</ParamField>
+
+<ParamField path="webhookSecret" type="string">
+  Paystack webhook secret for signature verification. Falls back to `secretKey` if not provided.
+  
+  **Optional.** Used in `handleWebhook()` method.
+</ParamField>
+
+<ParamField path="baseUrl" type="string">
+  Custom Paystack API base URL.
+  
+  **Default:** `"https://api.paystack.co"`
+</ParamField>
+
+<ParamField path="timeoutMs" type="number">
+  Request timeout in milliseconds.
+  
+  **Default:** `15000` (15 seconds)
+</ParamField>
+
+<ParamField path="fetchFn" type="typeof fetch">
+  Custom fetch implementation for testing or special network requirements.
+  
+  **Default:** global `fetch`
+</ParamField>
+
+## Configuration Example
+
+```typescript
+import { PaystackAdapter } from '@vaultsaas/sdk';
+
+const paystack = new PaystackAdapter({
+  secretKey: process.env.PAYSTACK_SECRET_KEY,
+  webhookSecret: process.env.PAYSTACK_WEBHOOK_SECRET,
+});
+```
+
+## Supported Capabilities
+
+### Payment Methods
+
+<ResponseField name="card" type="Payment Method">
+  Credit and debit cards including Visa, Mastercard, and Verve.
+  
+  Supports tokenized cards and raw card details with full PCI compliance.
+</ResponseField>
+
+<ResponseField name="bank_transfer" type="Payment Method">
+  Direct bank transfers and bank account debits.
+  
+  Available in Nigeria (NGN), Ghana (GHS), South Africa (ZAR), and Kenya (KES).
+</ResponseField>
+
+<ResponseField name="wallet" type="Payment Method">
+  Mobile money wallets popular in African markets.
+  
+  Includes M-Pesa, MTN Mobile Money, Vodafone Cash, and other regional providers.
+</ResponseField>
+
+### Supported Currencies
+
+5 currencies covering African and international markets:
+- **Nigeria:** NGN (Naira)
+- **Ghana:** GHS (Cedi)
+- **South Africa:** ZAR (Rand)
+- **Kenya:** KES (Shilling)
+- **International:** USD
+
+### Supported Countries
+
+4 African countries:
+- **NG** - Nigeria
+- **GH** - Ghana
+- **ZA** - South Africa
+- **KE** - Kenya
+
+## Methods
+
+Implements all `PaymentAdapter` interface methods:
+
+- `charge()` - Initiates a Paystack charge
+- `authorize()` - Creates a charge with authorization intent
+- `capture()` - Captures an authorized payment using authorization code
+- `refund()` - Processes a full or partial refund
+- `void()` - Cancels a transaction via refund
+- `getStatus()` - Verifies transaction status
+- `listPaymentMethods()` - Returns available payment methods
+- `handleWebhook()` - Verifies and processes Paystack webhook events
+
+## Webhook Events
+
+The adapter maps Paystack webhook events to VaultSaaS event types:
+
+| Paystack Event | VaultSaaS Event |
+|----------------|----------------|
+| `charge.success` | `payment.completed` |
+| `charge.failed` | `payment.failed` |
+| `charge.pending` | `payment.pending` |
+| `refund.processed` / `refund.success` | `payment.refunded` |
+| `refund.pending` | `payment.partially_refunded` |
+| `dispute.create` / `charge.dispute.create` | `payment.disputed` |
+| `dispute.resolve` / `charge.dispute.resolve` | `payment.dispute_resolved` |
+| `transfer.success` | `payout.completed` |
+| `transfer.failed` | `payout.failed` |
+
+## Webhook Verification
+
+Paystack webhooks are verified using HMAC-SHA512 signatures:
+
+- Signature header: `x-paystack-signature`
+- Algorithm: HMAC-SHA512 of raw payload
+- Secret: `webhookSecret` (or falls back to `secretKey`)
+
+```typescript
+await paystack.handleWebhook(
+  request.body,
+  request.headers
+);
+```
+
+<Warning>
+  Always verify webhook signatures before processing events. Paystack uses SHA512, not SHA256.
+</Warning>
+
+## Status Mapping
+
+Paystack transaction statuses are mapped to VaultSaaS statuses:
+
+| Paystack Status | VaultSaaS Status |
+|----------------|------------------|
+| `success` | `completed` |
+| `pending` / `ongoing` / `queued` | `pending` |
+| `abandoned` | `cancelled` |
+| `failed` / `reversed` | `failed` |
+
+## Error Handling
+
+The adapter enriches errors with Paystack-specific context:
+
+```typescript
+{
+  code: 'PROVIDER_ERROR',
+  hint: {
+    providerCode: 'declined',
+    providerMessage: 'Declined: Insufficient funds',
+    httpStatus: 400,
+    raw: { /* original Paystack error */ }
+  },
+  operation: 'charge'
+}
+```
+
+## Provider Metadata
+
+Payment results include Paystack-specific metadata:
+
+```typescript
+{
+  providerMetadata: {
+    paystackStatus: 'success',
+    gatewayResponse: 'Approved'
+  }
+}
+```
+
+## Special Considerations
+
+### Customer Email Required
+
+Paystack requires a customer email address for all charge and authorize operations:
+
+```typescript
+// ✅ Valid - includes customer email
+await paystack.charge({
+  amount: 10000,
+  currency: 'NGN',
+  customer: {
+    email: 'customer@example.com', // Required!
+  },
+  paymentMethod: { type: 'card', token: 'tok_...' },
+});
+
+// ❌ Throws VaultProviderError - missing email
+await paystack.charge({
+  amount: 10000,
+  currency: 'NGN',
+  paymentMethod: { type: 'card', token: 'tok_...' },
+});
+```
+
+### Capture Implementation
+
+Paystack doesn't have a native "capture" endpoint. The adapter implements capture by:
+
+1. Verifying the original transaction to get the authorization code
+2. Creating a new charge using the `charge_authorization` endpoint
+
+This means the `capture()` method requires the original transaction to have an authorization code and customer email.
+
+### Response Envelope
+
+Paystack wraps all responses in an envelope:
+
+```json
+{
+  "status": true,
+  "message": "Charge attempted",
+  "data": { /* actual payment data */ }
+}
+```
+
+The adapter automatically unwraps this and validates the `status` field.
+
+## Usage Examples
+
+### Card Payment (Nigeria)
+
+```typescript
+import { PaystackAdapter } from '@vaultsaas/sdk';
+
+const paystack = new PaystackAdapter({
+  secretKey: process.env.PAYSTACK_SECRET_KEY,
+});
+
+const result = await paystack.charge({
+  amount: 500000, // ₦5,000.00 in kobo (100 kobo = 1 Naira)
+  currency: 'NGN',
+  paymentMethod: {
+    type: 'card',
+    number: '4084084084084081',
+    expMonth: 12,
+    expYear: 2025,
+    cvv: '408',
+  },
+  customer: {
+    email: 'customer@example.com', // Required
+    name: 'Adebayo Okonkwo',
+  },
+});
+
+console.log(result.status); // 'completed'
+console.log(result.paymentMethod.last4); // '4081'
+```
+
+### Bank Transfer (Ghana)
+
+```typescript
+const result = await paystack.charge({
+  amount: 10000, // GH₵100.00 in pesewas
+  currency: 'GHS',
+  paymentMethod: {
+    type: 'bank_transfer',
+    bankCode: 'GH010100',
+    accountNumber: '0123456789',
+  },
+  customer: {
+    email: 'customer@example.com',
+    name: 'Kwame Mensah',
+  },
+});
+```
+
+### Mobile Money Wallet (Kenya)
+
+```typescript
+const result = await paystack.charge({
+  amount: 500000, // KSh 5,000.00 in cents
+  currency: 'KES',
+  paymentMethod: {
+    type: 'wallet',
+    walletType: 'mpesa',
+    token: 'mobile_money_token',
+  },
+  customer: {
+    email: 'customer@example.com',
+    name: 'Wanjiru Kamau',
+  },
+});
+```
+
+### Authorize and Capture
+
+```typescript
+// Step 1: Authorize the payment
+const auth = await paystack.authorize({
+  amount: 100000, // ₦1,000.00
+  currency: 'NGN',
+  paymentMethod: {
+    type: 'card',
+    token: 'tok_sample',
+  },
+  customer: {
+    email: 'customer@example.com',
+  },
+});
+
+console.log(auth.status); // 'authorized'
+
+// Step 2: Capture the authorized payment
+const captured = await paystack.capture({
+  transactionId: auth.id,
+  amount: 100000, // Optional: capture full or partial amount
+});
+
+console.log(captured.status); // 'completed'
+```
+
+## Currency Precision
+
+Paystack uses subunits for amounts:
+
+- **NGN:** Amount in kobo (1 Naira = 100 kobo)
+- **GHS:** Amount in pesewas (1 Cedi = 100 pesewas)
+- **ZAR:** Amount in cents (1 Rand = 100 cents)
+- **KES:** Amount in cents (1 Shilling = 100 cents)
+- **USD:** Amount in cents (1 Dollar = 100 cents)
+
+Always multiply your base currency amount by 100:
+
+```typescript
+const amountInNaira = 50.00;
+const amountInKobo = amountInNaira * 100; // 5000
+```
+
+## Related Documentation
+
+- [PaymentAdapter Interface](/api/adapters/payment-adapter)
+- [VaultClient](/api/vault-client)
+- [Error Handling](/api/types/errors)

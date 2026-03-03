@@ -1,0 +1,224 @@
+---
+title: "Payment Result Types"
+description: "Response types returned by payment operations"
+---
+
+Payment result types define the normalized response structure returned by VaultSaaS SDK operations.
+
+## PaymentResult
+
+Normalized result returned by `charge`, `authorize`, and `capture` operations. Provider-specific data is available via `providerMetadata`.
+
+<ResponseField name="id" type="string">
+  VaultSaaS-normalized transaction identifier.
+</ResponseField>
+
+<ResponseField name="status" type="PaymentStatus">
+  Normalized payment status across all providers.
+  
+  Possible values: `'completed'`, `'pending'`, `'requires_action'`, `'declined'`, `'failed'`, `'cancelled'`, `'authorized'`
+</ResponseField>
+
+<ResponseField name="provider" type="string">
+  Name of the provider that processed the transaction (e.g. "stripe").
+</ResponseField>
+
+<ResponseField name="providerId" type="string">
+  Provider's own identifier for this transaction.
+</ResponseField>
+
+<ResponseField name="amount" type="number">
+  Amount in smallest currency unit.
+</ResponseField>
+
+<ResponseField name="currency" type="string">
+  ISO 4217 currency code.
+</ResponseField>
+
+<ResponseField name="paymentMethod" type="object">
+  Snapshot of the payment method used.
+  
+  <Expandable title="properties">
+    <ResponseField name="type" type="string">
+      Payment method type (e.g. "card", "pix", "bank_transfer").
+    </ResponseField>
+    
+    <ResponseField name="last4" type="string">
+      Last 4 digits of card number (for card payments).
+    </ResponseField>
+    
+    <ResponseField name="brand" type="string">
+      Card brand (e.g. "visa", "mastercard").
+    </ResponseField>
+    
+    <ResponseField name="expiryMonth" type="number">
+      Card expiration month (1-12).
+    </ResponseField>
+    
+    <ResponseField name="expiryYear" type="number">
+      Card expiration year (4 digits).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="customer" type="object">
+  Customer information associated with the transaction.
+  
+  <Expandable title="properties">
+    <ResponseField name="id" type="string">
+      Provider's customer identifier.
+    </ResponseField>
+    
+    <ResponseField name="email" type="string">
+      Customer email address.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="metadata" type="Record<string, string>">
+  Merged metadata from the request and provider response.
+</ResponseField>
+
+<ResponseField name="routing" type="object">
+  How the provider was selected for this transaction.
+  
+  <Expandable title="properties">
+    <ResponseField name="source" type="'local' | 'platform'">
+      Whether routing was performed locally or by the platform.
+    </ResponseField>
+    
+    <ResponseField name="reason" type="string">
+      Human-readable explanation of why this provider was selected.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of when the transaction was created.
+</ResponseField>
+
+<ResponseField name="providerMetadata" type="Record<string, unknown>">
+  Raw provider-specific fields not mapped to the normalized schema.
+</ResponseField>
+
+---
+
+## RefundResult
+
+Normalized result returned by a `refund` operation.
+
+<ResponseField name="id" type="string">
+  Unique refund identifier.
+</ResponseField>
+
+<ResponseField name="transactionId" type="string">
+  The original transaction that was refunded.
+</ResponseField>
+
+<ResponseField name="status" type="'completed' | 'pending' | 'failed'">
+  Status of the refund operation.
+</ResponseField>
+
+<ResponseField name="amount" type="number">
+  Refunded amount in smallest currency unit.
+</ResponseField>
+
+<ResponseField name="currency" type="string">
+  ISO 4217 currency code.
+</ResponseField>
+
+<ResponseField name="provider" type="string">
+  Name of the provider that processed the refund.
+</ResponseField>
+
+<ResponseField name="providerId" type="string">
+  Provider's own identifier for this refund.
+</ResponseField>
+
+<ResponseField name="reason" type="string">
+  Human-readable reason for the refund.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of when the refund was created.
+</ResponseField>
+
+---
+
+## VoidResult
+
+Normalized result returned by a `void` (cancellation) operation.
+
+<ResponseField name="id" type="string">
+  Unique void operation identifier.
+</ResponseField>
+
+<ResponseField name="transactionId" type="string">
+  The original authorized transaction that was voided.
+</ResponseField>
+
+<ResponseField name="status" type="'completed' | 'failed'">
+  Status of the void operation.
+</ResponseField>
+
+<ResponseField name="provider" type="string">
+  Name of the provider that processed the void.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of when the void was created.
+</ResponseField>
+
+---
+
+## TransactionStatus
+
+Full transaction status including status history, returned by `getStatus`.
+
+<ResponseField name="id" type="string">
+  Transaction identifier.
+</ResponseField>
+
+<ResponseField name="status" type="PaymentStatus">
+  Current normalized payment status.
+  
+  Possible values: `'completed'`, `'pending'`, `'requires_action'`, `'declined'`, `'failed'`, `'cancelled'`, `'authorized'`
+</ResponseField>
+
+<ResponseField name="provider" type="string">
+  Name of the provider that processed the transaction.
+</ResponseField>
+
+<ResponseField name="providerId" type="string">
+  Provider's own identifier for this transaction.
+</ResponseField>
+
+<ResponseField name="amount" type="number">
+  Amount in smallest currency unit.
+</ResponseField>
+
+<ResponseField name="currency" type="string">
+  ISO 4217 currency code.
+</ResponseField>
+
+<ResponseField name="history" type="StatusChange[]">
+  Chronological status changes for this transaction.
+  
+  <Expandable title="StatusChange properties">
+    <ResponseField name="status" type="PaymentStatus">
+      The status at this point in the timeline.
+    </ResponseField>
+    
+    <ResponseField name="timestamp" type="string">
+      ISO 8601 timestamp when this status was recorded.
+    </ResponseField>
+    
+    <ResponseField name="reason" type="string">
+      Optional reason or description for the status change.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 timestamp of the most recent status update.
+</ResponseField>

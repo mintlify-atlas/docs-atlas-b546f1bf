@@ -1,0 +1,143 @@
+---
+title: Versioning & Migrations
+description: Semantic versioning policy and migration guidance for VaultSaaS SDK
+---
+
+This SDK follows Semantic Versioning and ships release notes through Changesets.
+
+## SemVer Policy
+
+VaultSaaS SDK uses strict semantic versioning:
+
+<CardGroup cols={3}>
+  <Card title="MAJOR" icon="triangle-exclamation">
+    Breaking API or behavior changes
+  </Card>
+  <Card title="MINOR" icon="plus">
+    Backward-compatible features
+  </Card>
+  <Card title="PATCH" icon="wrench">
+    Backward-compatible fixes
+  </Card>
+</CardGroup>
+
+### Public Contract
+
+The following are considered part of the public contract and follow SemVer guarantees:
+
+- Exported TypeScript types
+- `VaultClient` methods and request/response shapes
+- Canonical error structure (`VaultError`)
+- Webhook normalization output (`VaultEvent`)
+
+<Note>
+Internal implementation details, private methods, and undocumented APIs are not covered by SemVer guarantees and may change in any release.
+</Note>
+
+## Deprecation Policy
+
+When deprecating a public API, we follow these steps:
+
+<Steps>
+  <Step title="Announce deprecation">
+    Add a clear note in README/docs and release notes explaining the deprecation.
+  </Step>
+  
+  <Step title="Maintain compatibility">
+    Keep the deprecated API working through at least one full minor release.
+  </Step>
+  
+  <Step title="Provide migration path">
+    Provide a direct migration path with before/after snippets.
+  </Step>
+  
+  <Step title="Remove in major version">
+    Remove only in the next major release.
+  </Step>
+</Steps>
+
+## Migration Note Template
+
+Use this format in changelog/docs:
+
+```md
+### Migration: <old API> -> <new API>
+
+- Deprecated in: vX.Y.0
+- Removal target: v(X+1).0.0
+- Why: <reason>
+- Action required: <specific code change>
+```
+
+## Example Migration
+
+Here's an example of how a migration might look:
+
+<CodeGroup>
+```typescript Before (deprecated)
+await vault.charge({
+  amount: 1000,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'tok_visa' },
+});
+```
+
+```typescript After
+await vault.charge({
+  amount: 1000,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'pm_card_visa' },
+  metadata: { migration: 'v2-routing' },
+});
+```
+</CodeGroup>
+
+## Release Process Guidance
+
+<Warning>
+Do not publish breaking removals without:
+- A prior deprecation cycle
+- Migration documentation
+- Major version bump
+</Warning>
+
+### Release Checklist
+
+<Steps>
+  <Step title="Add changeset">
+    Add a changeset for user-facing changes:
+    
+    ```bash
+    bunx changeset
+    ```
+  </Step>
+  
+  <Step title="Confirm version bump">
+    Confirm version bump type follows SemVer policy (major/minor/patch).
+  </Step>
+  
+  <Step title="Write actionable changelog">
+    Keep changelog entries actionable and migration-focused.
+  </Step>
+  
+  <Step title="Run release gates">
+    Run release gates locally:
+    
+    ```bash
+    bun run release:verify
+    bun run release:dry-run
+    ```
+  </Step>
+  
+  <Step title="Publish via workflow">
+    Publish only from the release workflow after CI + docs + package gates pass.
+  </Step>
+</Steps>
+
+## Version Support
+
+<Info>
+Security patches and critical bug fixes will be applied to the latest release in the supported range. Users are encouraged to stay on the latest version.
+</Info>
+
+See the [Security](/resources/security) page for information about supported versions and vulnerability reporting.

@@ -1,0 +1,512 @@
+---
+title: Webhooks
+description: Handle and normalize payment provider webhooks
+---
+
+Use `vault.handleWebhook(provider, payload, headers)` to verify provider signatures and normalize provider-specific event payloads into a canonical `VaultEvent` format.
+
+## Overview
+
+Webhook handling provides:
+
+- **Signature Verification**: Cryptographic verification of webhook authenticity
+- **Event Normalization**: Consistent event shape across all providers
+- **Automatic Parsing**: Raw payload parsing and type conversion
+
+## Provider Support
+
+Each provider adapter implements webhook signature verification:
+
+| Provider | Header | Config Required |
+|----------|--------|----------------|
+| **Stripe** | `stripe-signature` | `webhookSecret` |
+| **dLocal** | `x-dlocal-signature` or `x-signature` | `webhookSecret` or `secretKey` |
+| **Paystack** | `x-paystack-signature` | `webhookSecret` or `secretKey` |
+
+<Warning>
+**Critical**: Pass the raw request body exactly as received (string or Buffer). Do not parse and re-serialize JSON before verification, as this will cause signature validation to fail.
+</Warning>
+
+## Basic Usage
+
+```typescript
+import { VaultClient, WebhookVerificationError } from '@vaultsaas/core';
+
+const vault = new VaultClient({
+  providers: {
+    stripe: {
+      adapter: StripeAdapter,
+      config: {
+        apiKey: process.env.STRIPE_API_KEY,
+        webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+      },
+    },
+  },
+  routing: {
+    rules: [{ match: { default: true }, provider: 'stripe' }],
+  },
+});
+
+try {
+  const event = await vault.handleWebhook(
+    'stripe',
+    rawBody,  // Buffer or string - don't parse!
+    headers   // Request headers
+  );
+  
+  console.log('Event type:', event.type);
+  console.log('Transaction ID:', event.transactionId);
+  console.log('Provider event ID:', event.providerEventId);
+} catch (error) {
+  if (error instanceof WebhookVerificationError) {
+    // Signature verification failed
+    return { status: 400, body: error.message };
+  }
+  throw error;
+}
+```
+
+## VaultEvent Structure
+
+All webhook events are normalized to this shape:
+
+```typescript src/types/events.ts:13
+export interface VaultEvent {
+  id: string;                  // Vault-generated event ID
+  type: VaultEventType;        // Canonical event type
+  provider: string;            // Provider name (e.g., "stripe")
+  transactionId?: string;      // Related transaction ID
+  providerEventId: string;     // Original provider event ID
+  data: Record<string, unknown>; // Event-specific data
+  rawPayload: unknown;         // Original webhook payload
+  timestamp: string;           // ISO 8601 timestamp
+}
+```
+
+### Event Types
+
+```typescript src/types/events.ts:1
+export type VaultEventType =
+  | 'payment.completed'
+  | 'payment.failed'
+  | 'payment.pending'
+  | 'payment.requires_action'
+  | 'payment.refunded'
+  | 'payment.partially_refunded'
+  | 'payment.disputed'
+  | 'payment.dispute_resolved'
+  | 'payout.completed'
+  | 'payout.failed';
+```
+
+## Framework Examples
+
+<CodeGroup>
+```typescript Node.js HTTP
+import { createServer } from 'node:http';
+import { StripeAdapter, VaultClient, WebhookVerificationError } from '@vaultsaas/core';
+
+function mustEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing env var: ${name}`);
+  return value;
+}
+
+const vault = new VaultClient({
+  providers: {
+    stripe: {
+      adapter: StripeAdapter,
+      config: {
+        apiKey: mustEnv('STRIPE_API_KEY'),
+        webhookSecret: mustEnv('STRIPE_WEBHOOK_SECRET'),
+      },
+    },
+  },
+  routing: {
+    rules: [{ match: { default: true }, provider: 'stripe' }],
+  },
+});
+
+const server = createServer(async (req, res) => {
+  if (req.method !== 'POST' || req.url !== '/webhooks/stripe') {
+    res.statusCode = 404;
+    res.end('not found');
+    return;
+  }
+
+  const chunks: Buffer[] = [];
+  req.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+
+  req.on('end', async () => {
+    try {
+      const payload = Buffer.concat(chunks);
+      const headers = Object.fromEntries(
+        Object.entries(req.headers)
+          .filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+      );
+
+      const event = await vault.handleWebhook('stripe', payload, headers);
+      console.log('Normalized event:', event.type, event.providerEventId);
+      res.statusCode = 200;
+      res.end('ok');
+    } catch (error) {
+      if (error instanceof WebhookVerificationError) {
+        res.statusCode = 400;
+        res.end(`${error.code}: ${error.message}`);
+        return;
+      }
+      res.statusCode = 500;
+      res.end('internal_error');
+    }
+  });
+});
+
+server.listen(3000, () => {
+  console.log('Listening on http://localhost:3000/webhooks/stripe');
+});
+```
+
+```typescript Express
+import express from 'express';
+import { VaultClient, WebhookVerificationError } from '@vaultsaas/core';
+
+const app = express();
+
+// IMPORTANT: Use raw body parser for webhook routes
+app.post(
+  '/webhooks/stripe',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    try {
+      const event = await vault.handleWebhook(
+        'stripe',
+        req.body, // Already a Buffer from express.raw()
+        req.headers as Record<string, string>
+      );
+      
+      // Process event
+      await processWebhookEvent(event);
+      
+      res.json({ received: true });
+    } catch (error) {
+      if (error instanceof WebhookVerificationError) {
+        return res.status(400).json({ error: error.message });
+      }
+      res.status(500).json({ error: 'Internal error' });
+    }
+  }
+);
+
+app.listen(3000);
+```
+
+```typescript Next.js App Router
+// app/api/webhooks/stripe/route.ts
+import { vault } from '@/lib/vault';
+import { WebhookVerificationError } from '@vaultsaas/core';
+import { NextRequest, NextResponse } from 'next/server';
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.text(); // Get raw body as string
+    const headers = Object.fromEntries(request.headers.entries());
+
+    const event = await vault.handleWebhook('stripe', body, headers);
+    
+    // Process event
+    await processWebhookEvent(event);
+    
+    return NextResponse.json({ received: true });
+  } catch (error) {
+    if (error instanceof WebhookVerificationError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 400 }
+      );
+    }
+    return NextResponse.json(
+      { error: 'Internal error' },
+      { status: 500 }
+    );
+  }
+}
+
+// Disable body parsing
+export const runtime = 'edge';
+```
+
+```typescript Fastify
+import Fastify from 'fastify';
+import { VaultClient, WebhookVerificationError } from '@vaultsaas/core';
+
+const fastify = Fastify();
+
+fastify.post('/webhooks/stripe', async (request, reply) => {
+  try {
+    const event = await vault.handleWebhook(
+      'stripe',
+      request.rawBody, // Fastify provides rawBody
+      request.headers as Record<string, string>
+    );
+    
+    await processWebhookEvent(event);
+    
+    return { received: true };
+  } catch (error) {
+    if (error instanceof WebhookVerificationError) {
+      reply.status(400);
+      return { error: error.message };
+    }
+    reply.status(500);
+    return { error: 'Internal error' };
+  }
+});
+
+fastify.listen({ port: 3000 });
+```
+</CodeGroup>
+
+## Event Processing
+
+<Tabs>
+  <Tab title="Basic Processing">
+    ```typescript
+    async function processWebhookEvent(event: VaultEvent) {
+      console.log(`Received ${event.type} from ${event.provider}`);
+      
+      switch (event.type) {
+        case 'payment.completed':
+          await handlePaymentCompleted(event);
+          break;
+        
+        case 'payment.failed':
+          await handlePaymentFailed(event);
+          break;
+        
+        case 'payment.refunded':
+          await handlePaymentRefunded(event);
+          break;
+        
+        default:
+          console.log('Unhandled event type:', event.type);
+      }
+    }
+    ```
+  </Tab>
+
+  <Tab title="Database Updates">
+    ```typescript
+    async function handlePaymentCompleted(event: VaultEvent) {
+      if (!event.transactionId) {
+        console.warn('No transaction ID in event');
+        return;
+      }
+      
+      await db.transaction.update({
+        where: { id: event.transactionId },
+        data: {
+          status: 'completed',
+          completedAt: new Date(event.timestamp),
+          providerEventId: event.providerEventId,
+        },
+      });
+      
+      // Trigger fulfillment
+      await fulfillOrder(event.transactionId);
+    }
+    ```
+  </Tab>
+
+  <Tab title="Idempotent Processing">
+    ```typescript
+    async function processWebhookEvent(event: VaultEvent) {
+      // Check if already processed
+      const existing = await db.webhookEvent.findUnique({
+        where: { providerEventId: event.providerEventId },
+      });
+      
+      if (existing) {
+        console.log('Event already processed:', event.providerEventId);
+        return; // Idempotent - safe to ignore
+      }
+      
+      // Process event
+      await processEvent(event);
+      
+      // Mark as processed
+      await db.webhookEvent.create({
+        data: {
+          providerEventId: event.providerEventId,
+          provider: event.provider,
+          type: event.type,
+          processedAt: new Date(),
+        },
+      });
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Signature Verification Details
+
+The SDK verifies webhook signatures when adapters support it:
+
+```typescript src/client/vault-client.ts:343
+async handleWebhook(
+  provider: string,
+  payload: Buffer | string,
+  headers: Record<string, string>,
+): Promise<VaultEvent> {
+  const adapter = this.getAdapter(provider);
+
+  if (adapter.handleWebhook) {
+    const handler = adapter.handleWebhook;
+    const event = await this.wrapProviderCall(provider, 'handleWebhook', () =>
+      Promise.resolve(handler.call(adapter, payload, headers)),
+    );
+
+    if (event.transactionId) {
+      this.transactionProviderIndex.set(event.transactionId, provider);
+    }
+
+    this.queueWebhookEvent(event);
+    return event;
+  }
+
+  const parsedPayload = this.parseWebhookPayload(payload);
+  const event = normalizeWebhookEvent(provider, parsedPayload, payload);
+
+  if (event.transactionId) {
+    this.transactionProviderIndex.set(event.transactionId, provider);
+  }
+
+  this.queueWebhookEvent(event);
+  return event;
+}
+```
+
+<Info>
+If signature verification fails, a `WebhookVerificationError` is thrown with code `WEBHOOK_SIGNATURE_INVALID`.
+</Info>
+
+## Best Practices
+
+<Tip>
+**Always use raw body**
+
+Configure your framework to preserve the raw request body for webhook routes:
+
+```typescript
+// Express
+app.use('/webhooks', express.raw({ type: 'application/json' }));
+
+// Next.js - use request.text() instead of request.json()
+const body = await request.text();
+```
+</Tip>
+
+<Tip>
+**Implement idempotent processing**
+
+Providers may send duplicate webhooks. Track processed event IDs to prevent duplicate actions.
+</Tip>
+
+<Tip>
+**Return 200 quickly**
+
+Acknowledge receipt immediately and process asynchronously:
+
+```typescript
+app.post('/webhooks/stripe', async (req, res) => {
+  const event = await vault.handleWebhook('stripe', req.body, req.headers);
+  
+  res.json({ received: true }); // Return 200 immediately
+  
+  // Process asynchronously
+  processWebhookEvent(event).catch(console.error);
+});
+```
+</Tip>
+
+<Warning>
+**Secure your webhook endpoints**
+
+- Always verify signatures (don't skip `handleWebhook`)
+- Use HTTPS in production
+- Consider IP allowlisting for additional security
+- Don't expose webhook URLs publicly
+</Warning>
+
+<Tip>
+**Log webhook events**
+
+Log all webhook events for debugging and audit trails:
+
+```typescript
+logger.info('Webhook received', {
+  provider: event.provider,
+  type: event.type,
+  providerEventId: event.providerEventId,
+  transactionId: event.transactionId,
+});
+```
+</Tip>
+
+## Testing Webhooks
+
+Use provider CLI tools to test webhook handling:
+
+<CodeGroup>
+```bash Stripe CLI
+# Install Stripe CLI
+stripe listen --forward-to localhost:3000/webhooks/stripe
+
+# Trigger test events
+stripe trigger payment_intent.succeeded
+```
+
+```bash ngrok for dLocal/Paystack
+# Expose local server
+ngrok http 3000
+
+# Configure webhook URL in provider dashboard
+https://your-ngrok-url.ngrok.io/webhooks/dlocal
+```
+</CodeGroup>
+
+## Platform Integration
+
+When Platform Connector is enabled, webhook events are automatically queued for analytics:
+
+```typescript src/client/vault-client.ts:573
+private queueWebhookEvent(event: VaultEvent): void {
+  if (!this.platformConnector) {
+    return;
+  }
+
+  this.platformConnector.queueWebhookEvent({
+    id: event.id,
+    type: event.type,
+    provider: event.provider,
+    transactionId: event.transactionId,
+    providerEventId: event.providerEventId,
+    data: event.data,
+    timestamp: event.timestamp,
+  });
+}
+```
+
+<Info>
+No additional code required - webhook events are automatically sent to VaultSaaS platform when `platformApiKey` is configured.
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Error Handling" icon="exclamation-triangle" href="/concepts/error-handling">
+    Handle webhook verification errors
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Learn about webhook normalization
+  </Card>
+</CardGroup>

@@ -1,0 +1,334 @@
+---
+title: 'DLocalAdapter'
+description: 'dLocal payment adapter for Latin American markets'
+icon: 'globe'
+---
+
+## Overview
+
+The `DLocalAdapter` implements the `PaymentAdapter` interface to process payments through dLocal's API. It specializes in Latin American payment methods including PIX, Boleto, cards, and bank transfers across 17 countries.
+
+## Class Signature
+
+```typescript
+class DLocalAdapter implements PaymentAdapter {
+  readonly name = 'dlocal';
+  static readonly supportedMethods = ['card', 'pix', 'boleto', 'bank_transfer'] as const;
+  static readonly supportedCurrencies = [
+    'BRL', 'MXN', 'ARS', 'CLP', 'COP', 'PEN', 'UYU', 'BOB', 'PYG',
+    'CRC', 'GTQ', 'PAB', 'DOP', 'USD'
+  ] as const;
+  static readonly supportedCountries = [
+    'BR', 'MX', 'AR', 'CL', 'CO', 'PE', 'UY', 'BO', 'PY',
+    'CR', 'GT', 'PA', 'DO', 'EC', 'SV', 'NI', 'HN'
+  ] as const;
+  readonly metadata: AdapterMetadata;
+  
+  constructor(config: Record<string, unknown>);
+}
+```
+
+## Constructor
+
+```typescript
+new DLocalAdapter(config: Record<string, unknown>)
+```
+
+### Configuration
+
+<ParamField path="xLogin" type="string" required>
+  dLocal API login credential (X-Login header).
+  
+  **Required.** Throws `VaultConfigError` if not provided.
+</ParamField>
+
+<ParamField path="xTransKey" type="string" required>
+  dLocal transaction key (X-Trans-Key header).
+  
+  **Required.** Throws `VaultConfigError` if not provided.
+</ParamField>
+
+<ParamField path="secretKey" type="string" required>
+  dLocal secret key for HMAC-SHA256 request signing.
+  
+  **Required.** Throws `VaultConfigError` if not provided.
+</ParamField>
+
+<ParamField path="webhookSecret" type="string">
+  dLocal webhook secret for signature verification. Falls back to `secretKey` if not provided.
+  
+  **Optional.** Used in `handleWebhook()` method.
+</ParamField>
+
+<ParamField path="baseUrl" type="string">
+  Custom dLocal API base URL.
+  
+  **Default:** `"https://api.dlocal.com"`
+</ParamField>
+
+<ParamField path="timeoutMs" type="number">
+  Request timeout in milliseconds.
+  
+  **Default:** `15000` (15 seconds)
+</ParamField>
+
+<ParamField path="fetchFn" type="typeof fetch">
+  Custom fetch implementation for testing or special network requirements.
+  
+  **Default:** global `fetch`
+</ParamField>
+
+## Configuration Example
+
+```typescript
+import { DLocalAdapter } from '@vaultsaas/sdk';
+
+const dlocal = new DLocalAdapter({
+  xLogin: process.env.DLOCAL_X_LOGIN,
+  xTransKey: process.env.DLOCAL_X_TRANS_KEY,
+  secretKey: process.env.DLOCAL_SECRET_KEY,
+  webhookSecret: process.env.DLOCAL_WEBHOOK_SECRET,
+});
+```
+
+## Supported Capabilities
+
+### Payment Methods
+
+<ResponseField name="card" type="Payment Method">
+  Credit and debit cards processed through dLocal's network.
+  
+  Supports local and international cards with tokenization.
+</ResponseField>
+
+<ResponseField name="pix" type="Payment Method">
+  **Brazil only.** Instant payment method via Brazil's PIX system.
+  
+  Currency: BRL only. Real-time bank transfers with QR code or payment link.
+</ResponseField>
+
+<ResponseField name="boleto" type="Payment Method">
+  **Brazil only.** Boleto bancário payment vouchers.
+  
+  Currency: BRL only. Requires customer document (CPF/CNPJ) for processing.
+</ResponseField>
+
+<ResponseField name="bank_transfer" type="Payment Method">
+  Direct bank transfers using local banking networks.
+  
+  Available in multiple countries with country-specific bank codes.
+</ResponseField>
+
+### Supported Currencies
+
+14 Latin American currencies plus USD:
+- **Brazil:** BRL
+- **Mexico:** MXN
+- **Argentina:** ARS
+- **Chile:** CLP
+- **Colombia:** COP
+- **Peru:** PEN
+- **Uruguay:** UYU
+- **Bolivia:** BOB
+- **Paraguay:** PYG
+- **Costa Rica:** CRC
+- **Guatemala:** GTQ
+- **Panama:** PAB
+- **Dominican Republic:** DOP
+- **International:** USD
+
+### Supported Countries
+
+17 Latin American countries:
+BR, MX, AR, CL, CO, PE, UY, BO, PY, CR, GT, PA, DO, EC, SV, NI, HN
+
+## Methods
+
+Implements all `PaymentAdapter` interface methods:
+
+- `charge()` - Creates a dLocal payment with automatic capture
+- `authorize()` - Creates a payment with manual capture
+- `capture()` - Captures an authorized payment
+- `refund()` - Processes a full or partial refund
+- `void()` - Cancels an uncaptured payment
+- `getStatus()` - Retrieves payment status
+- `listPaymentMethods()` - Returns available payment methods (card, PIX, Boleto)
+- `handleWebhook()` - Verifies and processes dLocal webhook events
+
+## Webhook Events
+
+The adapter maps dLocal webhook events to VaultSaaS event types:
+
+| dLocal Event | VaultSaaS Event |
+|--------------|----------------|
+| `payment.approved` | `payment.completed` |
+| `payment.captured` | `payment.completed` |
+| `payment.pending` | `payment.pending` |
+| `payment.failed` | `payment.failed` |
+| `payment.rejected` | `payment.failed` |
+| `payment.refunded` | `payment.refunded` |
+| `payment.partially_refunded` | `payment.partially_refunded` |
+| `chargeback.created` | `payment.disputed` |
+| `chargeback.closed` | `payment.dispute_resolved` |
+
+## Webhook Verification
+
+dLocal webhooks are verified using HMAC-SHA256 signatures:
+
+- Signature header: `x-dlocal-signature` or `x-signature`
+- Algorithm: HMAC-SHA256 of raw payload
+- Secret: `webhookSecret` (or falls back to `secretKey`)
+
+```typescript
+await dlocal.handleWebhook(
+  request.body,
+  request.headers
+);
+```
+
+<Warning>
+  Ensure your webhook endpoint preserves the raw request body. JSON parsing before verification will cause signature validation to fail.
+</Warning>
+
+## Authentication
+
+dLocal uses V2-HMAC-SHA256 authentication with the following headers:
+
+```
+X-Login: {xLogin}
+X-Trans-Key: {xTransKey}
+X-Version: 2.1
+X-Date: {ISO 8601 timestamp}
+Authorization: V2-HMAC-SHA256, Signature: {hmac}
+```
+
+The HMAC signature is computed as:
+```
+HMAC-SHA256(secretKey, xLogin + timestamp + requestBody)
+```
+
+## Status Mapping
+
+dLocal payment statuses are mapped to VaultSaaS statuses:
+
+| dLocal Status | VaultSaaS Status |
+|--------------|------------------|
+| `AUTHORIZED` | `authorized` |
+| `PAID` / `APPROVED` / `CAPTURED` | `completed` |
+| `PENDING` / `IN_PROCESS` | `pending` |
+| `REJECTED` / `DECLINED` | `declined` |
+| `CANCELED` / `CANCELLED` | `cancelled` |
+| `REQUIRES_ACTION` | `requires_action` |
+| Other | `failed` |
+
+## Error Handling
+
+The adapter enriches errors with dLocal-specific context:
+
+```typescript
+{
+  code: 'PROVIDER_ERROR',
+  hint: {
+    providerCode: '3001',
+    providerMessage: 'Card declined by issuer',
+    httpStatus: 400,
+    raw: { /* original dLocal error */ }
+  },
+  operation: 'charge'
+}
+```
+
+## Provider Metadata
+
+Payment results include dLocal-specific metadata:
+
+```typescript
+{
+  providerMetadata: {
+    dlocalStatus: 'PAID',
+    orderId: 'order_123456'
+  }
+}
+```
+
+## Usage Examples
+
+### PIX Payment (Brazil)
+
+```typescript
+import { DLocalAdapter } from '@vaultsaas/sdk';
+
+const dlocal = new DLocalAdapter({
+  xLogin: process.env.DLOCAL_X_LOGIN,
+  xTransKey: process.env.DLOCAL_X_TRANS_KEY,
+  secretKey: process.env.DLOCAL_SECRET_KEY,
+});
+
+const result = await dlocal.charge({
+  amount: 10000, // R$ 100.00 in cents
+  currency: 'BRL',
+  paymentMethod: {
+    type: 'pix',
+  },
+  customer: {
+    email: 'customer@example.com',
+    name: 'João Silva',
+    address: {
+      country: 'BR',
+    },
+  },
+  description: 'Pedido #12345',
+});
+
+console.log(result.status); // 'pending' or 'completed'
+```
+
+### Boleto Payment (Brazil)
+
+```typescript
+const result = await dlocal.charge({
+  amount: 5000, // R$ 50.00
+  currency: 'BRL',
+  paymentMethod: {
+    type: 'boleto',
+    customerDocument: '12345678900', // CPF
+  },
+  customer: {
+    email: 'customer@example.com',
+    name: 'Maria Santos',
+    document: '12345678900',
+    address: {
+      country: 'BR',
+    },
+  },
+});
+```
+
+### Card Payment
+
+```typescript
+const result = await dlocal.charge({
+  amount: 15000, // $150.00 MXN
+  currency: 'MXN',
+  paymentMethod: {
+    type: 'card',
+    number: '4111111111111111',
+    expMonth: 12,
+    expYear: 2025,
+    cvc: '123',
+  },
+  customer: {
+    email: 'customer@example.com',
+    name: 'Carlos Hernández',
+    address: {
+      country: 'MX',
+    },
+  },
+});
+```
+
+## Related Documentation
+
+- [PaymentAdapter Interface](/api/adapters/payment-adapter)
+- [VaultClient](/api/vault-client)
+- [Error Handling](/api/types/errors)

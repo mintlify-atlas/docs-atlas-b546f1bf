@@ -1,0 +1,286 @@
+---
+title: Stripe Adapter
+description: Complete guide to integrating Stripe with VaultSaaS SDK
+icon: stripe
+---
+
+The Stripe adapter provides comprehensive payment processing capabilities for global markets with support for cards, wallets, and bank transfers.
+
+## Configuration
+
+### Required Credentials
+
+- `apiKey`: Stripe secret key (`sk_test_...` or `sk_live_...`)
+- `webhookSecret`: Stripe webhook signing secret (`whsec_...`) - recommended for webhook verification
+
+### Basic Setup
+
+```typescript
+import { StripeAdapter, VaultClient } from '@vaultsaas/core';
+
+const vault = new VaultClient({
+  providers: {
+    stripe: {
+      adapter: StripeAdapter,
+      config: {
+        apiKey: process.env.STRIPE_API_KEY!,
+        webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+      },
+    },
+  },
+  routing: {
+    rules: [{ match: { default: true }, provider: 'stripe' }],
+  },
+});
+```
+
+### Optional Configuration
+
+```typescript
+config: {
+  apiKey: process.env.STRIPE_API_KEY!,
+  webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+  baseUrl: 'https://api.stripe.com',  // Custom API endpoint
+  timeoutMs: 15000,                     // Request timeout (default: 15s)
+  fetchFn: customFetch,                 // Custom fetch implementation
+}
+```
+
+## Supported Capabilities
+
+### Payment Methods
+
+- **Card**: Credit and debit cards
+- **Bank Transfer**: Direct bank transfers
+- **Wallet**: Apple Pay, Google Pay, and other digital wallets
+
+### Currencies
+
+Stripe supports major global currencies including:
+
+`USD`, `EUR`, `GBP`, `CAD`, `AUD`, `JPY`, `CHF`, `SEK`, `NOK`, `DKK`, `NZD`, `SGD`, `HKD`, `MXN`, `BRL`, `PLN`, `CZK`, `HUF`, `RON`, `BGN`, `INR`, `MYR`, `THB`
+
+### Countries
+
+Broad global availability across 40+ countries including:
+
+`US`, `GB`, `DE`, `FR`, `CA`, `AU`, `JP`, `IT`, `ES`, `NL`, `BE`, `AT`, `CH`, `SE`, `NO`, `DK`, `FI`, `IE`, `PT`, `LU`, `NZ`, `SG`, `HK`, `MY`, `MX`, `BR`, `PL`, `CZ`, `HU`, `RO`, `BG`, and more EU countries.
+
+## Usage Examples
+
+### Charge a Card
+
+```typescript
+const result = await vault.charge({
+  amount: 2500,
+  currency: 'USD',
+  paymentMethod: {
+    type: 'card',
+    token: 'pm_card_visa',  // Stripe payment method token
+  },
+  customer: {
+    email: 'buyer@example.com',
+  },
+  metadata: {
+    orderId: 'order_123',
+  },
+});
+
+console.log(result.id);        // Transaction ID
+console.log(result.status);    // 'completed', 'authorized', etc.
+```
+
+### Authorize & Capture
+
+```typescript
+// Step 1: Authorize payment
+const auth = await vault.authorize({
+  amount: 5000,
+  currency: 'EUR',
+  paymentMethod: {
+    type: 'card',
+    token: 'pm_card_visa',
+  },
+  customer: {
+    email: 'buyer@example.com',
+  },
+});
+
+console.log(auth.status); // 'authorized'
+
+// Step 2: Capture later (full or partial)
+const captured = await vault.capture({
+  transactionId: auth.id,
+  amount: 5000, // Optional: capture partial amount
+});
+
+console.log(captured.status); // 'completed'
+```
+
+### Refund a Payment
+
+```typescript
+// Full refund
+const refund = await vault.refund({
+  transactionId: 'pi_123456789',
+});
+
+// Partial refund with reason
+const partialRefund = await vault.refund({
+  transactionId: 'pi_123456789',
+  amount: 1000,
+  reason: 'Customer requested partial refund',
+});
+```
+
+### Void an Authorization
+
+```typescript
+const voided = await vault.void({
+  transactionId: 'pi_123456789',
+});
+
+console.log(voided.status); // 'completed' if successfully cancelled
+```
+
+## Webhooks
+
+### Signature Verification
+
+Stripe webhooks use HMAC-SHA256 signature verification with strict replay protection.
+
+<Warning>
+**Critical**: Pass the **raw request body** as a Buffer. Using parsed JSON will break signature verification.
+</Warning>
+
+### Verification Requirements
+
+Stripe enforces:
+- Presence of `Stripe-Signature` header
+- Valid timestamp value in signature
+- 5-minute replay tolerance
+- HMAC match on `${timestamp}.${rawPayload}`
+
+### Webhook Handler
+
+```typescript
+import express from 'express';
+
+const app = express();
+
+// IMPORTANT: Use express.raw() to preserve raw body
+app.post('/webhooks/stripe',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    try {
+      const event = await vault.handleWebhook(
+        'stripe',
+        req.body,  // Raw Buffer
+        req.headers as Record<string, string>
+      );
+
+      console.log('Event type:', event.type);
+      console.log('Transaction ID:', event.transactionId);
+
+      // Handle event
+      switch (event.type) {
+        case 'payment.completed':
+          // Handle successful payment
+          break;
+        case 'payment.failed':
+          // Handle failed payment
+          break;
+        case 'payment.refunded':
+          // Handle refund
+          break;
+      }
+
+      res.json({ received: true });
+    } catch (error) {
+      console.error('Webhook verification failed:', error);
+      res.status(400).send('Webhook verification failed');
+    }
+  }
+);
+```
+
+### Supported Event Types
+
+| Stripe Event | VaultSaaS Event Type |
+|--------------|---------------------|
+| `payment_intent.succeeded` | `payment.completed` |
+| `payment_intent.payment_failed` | `payment.failed` |
+| `payment_intent.processing` | `payment.pending` |
+| `payment_intent.requires_action` | `payment.requires_action` |
+| `charge.refunded` | `payment.refunded` |
+| `charge.dispute.created` | `payment.disputed` |
+| `charge.dispute.closed` | `payment.dispute_resolved` |
+| `payout.paid` | `payout.completed` |
+| `payout.failed` | `payout.failed` |
+
+## Common Pitfalls
+
+<Warning>
+### Webhook Body Parsing
+Using parsed JSON instead of raw webhook body breaks signature verification. Always use `express.raw()` or equivalent.
+</Warning>
+
+<Warning>
+### Test vs Live Keys
+Mixing test keys (`sk_test_...`) with live mode endpoints causes authentication failures. Keep environments separate.
+</Warning>
+
+<Warning>
+### Missing Webhook Secret
+Omitting `webhookSecret` prevents webhook signature verification. This leaves your endpoint vulnerable to replay attacks.
+</Warning>
+
+## Test Mode
+
+### Development Setup
+
+- Use `sk_test_...` API keys for development
+- Stripe test cards for non-3DS testing:
+  - `4242424242424242` - Visa (success)
+  - `4000000000000002` - Card declined
+  - `4000002500003155` - Requires authentication (3DS)
+
+### Test Webhook Events
+
+Use the Stripe CLI to forward test webhooks:
+
+```bash
+stripe listen --forward-to localhost:3000/webhooks/stripe
+```
+
+This provides a webhook signing secret for local testing.
+
+## Error Handling
+
+```typescript
+try {
+  const result = await vault.charge({ /* ... */ });
+} catch (error) {
+  if (error.code === 'PROVIDER_ERROR') {
+    console.error('Provider error:', error.hint.providerMessage);
+    console.error('Decline code:', error.hint.declineCode);
+  }
+}
+```
+
+## Reference
+
+- [Stripe API Documentation](https://stripe.com/docs/api)
+- [Stripe Test Cards](https://stripe.com/docs/testing)
+- [Webhook Security](https://stripe.com/docs/webhooks/signatures)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Routing Rules" icon="route" href="/concepts/routing">
+    Configure intelligent payment routing
+  </Card>
+  <Card title="Error Handling" icon="triangle-exclamation" href="/concepts/error-handling">
+    Learn about error types and recovery
+  </Card>
+</CardGroup>

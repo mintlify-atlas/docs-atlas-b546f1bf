@@ -1,0 +1,194 @@
+---
+title: "Payment Method Types"
+description: "Payment method input and information types"
+---
+
+Payment method types define the various payment instruments supported by VaultSaaS SDK.
+
+## PaymentMethodInput
+
+Payment method input discriminated by `type`. Supports card (token or raw), bank transfer, wallet, PIX, and boleto payment methods.
+
+This is a discriminated union type where the shape depends on the `type` field.
+
+### Card with Token
+
+<ResponseField name="type" type="'card'" required>
+  Payment method type.
+</ResponseField>
+
+<ResponseField name="token" type="string" required>
+  Tokenized card identifier from the provider.
+</ResponseField>
+
+#### Example
+
+```typescript
+const paymentMethod: PaymentMethodInput = {
+  type: 'card',
+  token: 'tok_visa_4242'
+};
+```
+
+### Card with Raw Details
+
+<ResponseField name="type" type="'card'" required>
+  Payment method type.
+</ResponseField>
+
+<ResponseField name="number" type="string" required>
+  Card number (PAN).
+</ResponseField>
+
+<ResponseField name="expMonth" type="number" required>
+  Card expiration month (1-12).
+</ResponseField>
+
+<ResponseField name="expYear" type="number" required>
+  Card expiration year (4 digits).
+</ResponseField>
+
+<ResponseField name="cvc" type="string" required>
+  Card verification code (CVV/CVC).
+</ResponseField>
+
+#### Example
+
+```typescript
+const paymentMethod: PaymentMethodInput = {
+  type: 'card',
+  number: '4242424242424242',
+  expMonth: 12,
+  expYear: 2025,
+  cvc: '123'
+};
+```
+
+### Bank Transfer
+
+<ResponseField name="type" type="'bank_transfer'" required>
+  Payment method type.
+</ResponseField>
+
+<ResponseField name="bankCode" type="string" required>
+  Bank identifier code.
+</ResponseField>
+
+<ResponseField name="accountNumber" type="string" required>
+  Customer's bank account number.
+</ResponseField>
+
+#### Example
+
+```typescript
+const paymentMethod: PaymentMethodInput = {
+  type: 'bank_transfer',
+  bankCode: '001',
+  accountNumber: '12345678'
+};
+```
+
+### Wallet
+
+<ResponseField name="type" type="'wallet'" required>
+  Payment method type.
+</ResponseField>
+
+<ResponseField name="walletType" type="string" required>
+  Wallet provider (e.g. "apple_pay", "google_pay").
+</ResponseField>
+
+<ResponseField name="token" type="string" required>
+  Tokenized wallet payment data.
+</ResponseField>
+
+#### Example
+
+```typescript
+const paymentMethod: PaymentMethodInput = {
+  type: 'wallet',
+  walletType: 'apple_pay',
+  token: 'tok_apple_pay_abc123'
+};
+```
+
+### PIX
+
+<ResponseField name="type" type="'pix'" required>
+  Payment method type for Brazilian instant payments.
+</ResponseField>
+
+#### Example
+
+```typescript
+const paymentMethod: PaymentMethodInput = {
+  type: 'pix'
+};
+```
+
+### Boleto
+
+<ResponseField name="type" type="'boleto'" required>
+  Payment method type for Brazilian boleto payments.
+</ResponseField>
+
+<ResponseField name="customerDocument" type="string" required>
+  Customer's CPF or CNPJ document number.
+</ResponseField>
+
+#### Example
+
+```typescript
+const paymentMethod: PaymentMethodInput = {
+  type: 'boleto',
+  customerDocument: '12345678900'
+};
+```
+
+---
+
+## PaymentMethodInfo
+
+Describes a payment method supported by a provider for a given country/currency combination. Returned by `listPaymentMethods`.
+
+<ResponseField name="type" type="string">
+  Payment method type identifier (e.g. "card", "pix", "bank_transfer").
+</ResponseField>
+
+<ResponseField name="provider" type="string">
+  Provider name that supports this payment method.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Human-readable display name.
+</ResponseField>
+
+<ResponseField name="currencies" type="string[]">
+  ISO 4217 currency codes this method supports.
+</ResponseField>
+
+<ResponseField name="countries" type="string[]">
+  ISO 3166-1 alpha-2 country codes this method supports.
+</ResponseField>
+
+<ResponseField name="minAmount" type="number">
+  Minimum amount in smallest currency unit, if applicable.
+</ResponseField>
+
+<ResponseField name="maxAmount" type="number">
+  Maximum amount in smallest currency unit, if applicable.
+</ResponseField>
+
+### Example Response
+
+```typescript
+const methodInfo: PaymentMethodInfo = {
+  type: 'pix',
+  provider: 'pagarme',
+  name: 'PIX',
+  currencies: ['BRL'],
+  countries: ['BR'],
+  minAmount: 100, // R$ 1.00 in centavos
+  maxAmount: 1000000 // R$ 10,000.00 in centavos
+};
+```

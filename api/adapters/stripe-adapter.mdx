@@ -1,0 +1,247 @@
+---
+title: 'StripeAdapter'
+description: 'Stripe payment adapter implementation for global payments'
+icon: 'stripe'
+---
+
+## Overview
+
+The `StripeAdapter` implements the `PaymentAdapter` interface to process payments through Stripe's API. It supports cards, bank transfers, and digital wallets across 40+ countries and 20+ currencies.
+
+## Class Signature
+
+```typescript
+class StripeAdapter implements PaymentAdapter {
+  readonly name = 'stripe';
+  static readonly supportedMethods = ['card', 'bank_transfer', 'wallet'] as const;
+  static readonly supportedCurrencies = [
+    'USD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY', 'CHF', 'SEK', 'NOK', 'DKK',
+    'NZD', 'SGD', 'HKD', 'MXN', 'BRL', 'PLN', 'CZK', 'HUF', 'RON', 'BGN',
+    'INR', 'MYR', 'THB'
+  ] as const;
+  static readonly supportedCountries = [
+    'US', 'GB', 'DE', 'FR', 'CA', 'AU', 'JP', 'IT', 'ES', 'NL', 'BE', 'AT',
+    'CH', 'SE', 'NO', 'DK', 'FI', 'IE', 'PT', 'LU', 'NZ', 'SG', 'HK', 'MY',
+    'MX', 'BR', 'PL', 'CZ', 'HU', 'RO', 'BG', 'HR', 'CY', 'EE', 'GR', 'LV',
+    'LT', 'MT', 'SK', 'SI', 'IN', 'TH'
+  ] as const;
+  readonly metadata: AdapterMetadata;
+  
+  constructor(config: Record<string, unknown>);
+}
+```
+
+## Constructor
+
+```typescript
+new StripeAdapter(config: Record<string, unknown>)
+```
+
+### Configuration
+
+<ParamField path="apiKey" type="string" required>
+  Stripe secret API key (starts with `sk_test_` or `sk_live_`).
+  
+  **Required.** Throws `VaultConfigError` if not provided.
+</ParamField>
+
+<ParamField path="webhookSecret" type="string">
+  Stripe webhook signing secret for signature verification (starts with `whsec_`).
+  
+  **Optional.** Required if using `handleWebhook()` method.
+</ParamField>
+
+<ParamField path="baseUrl" type="string">
+  Custom Stripe API base URL.
+  
+  **Default:** `"https://api.stripe.com"`
+</ParamField>
+
+<ParamField path="timeoutMs" type="number">
+  Request timeout in milliseconds.
+  
+  **Default:** `15000` (15 seconds)
+</ParamField>
+
+<ParamField path="fetchFn" type="typeof fetch">
+  Custom fetch implementation for testing or special network requirements.
+  
+  **Default:** global `fetch`
+</ParamField>
+
+## Configuration Example
+
+```typescript
+import { StripeAdapter } from '@vaultsaas/sdk';
+
+const stripe = new StripeAdapter({
+  apiKey: process.env.STRIPE_SECRET_KEY,
+  webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+  timeoutMs: 20000,
+});
+```
+
+## Supported Capabilities
+
+### Payment Methods
+
+<ResponseField name="card" type="Payment Method">
+  Credit and debit cards via Stripe's card processing network.
+  
+  Supports tokenized cards and raw card details (PCI-compliant environments only).
+</ResponseField>
+
+<ResponseField name="bank_transfer" type="Payment Method">
+  Bank transfers using Stripe's customer balance API.
+  
+  Available in select markets with ACH, SEPA, and other local bank transfer methods.
+</ResponseField>
+
+<ResponseField name="wallet" type="Payment Method">
+  Digital wallets including Apple Pay, Google Pay, and other Stripe-supported wallets.
+  
+  Requires wallet-specific integration and tokenization.
+</ResponseField>
+
+### Supported Currencies
+
+23 currencies including:
+- **Americas:** USD, CAD, MXN, BRL
+- **Europe:** EUR, GBP, CHF, SEK, NOK, DKK, PLN, CZK, HUF, RON, BGN
+- **Asia-Pacific:** JPY, AUD, NZD, SGD, HKD, INR, MYR, THB
+
+### Supported Countries
+
+42 countries across:
+- North America (US, CA)
+- Europe (EU27 + UK, Switzerland, Norway)
+- Asia-Pacific (JP, AU, NZ, SG, HK, MY, IN, TH)
+- Latin America (MX, BR)
+
+## Methods
+
+Implements all `PaymentAdapter` interface methods:
+
+- `charge()` - Creates a Stripe Payment Intent with automatic capture
+- `authorize()` - Creates a Payment Intent with manual capture
+- `capture()` - Captures an authorized Payment Intent
+- `refund()` - Creates a Stripe Refund
+- `void()` - Cancels an uncaptured Payment Intent
+- `getStatus()` - Retrieves Payment Intent status
+- `listPaymentMethods()` - Returns available Stripe payment methods
+- `handleWebhook()` - Verifies and processes Stripe webhook events
+
+## Webhook Events
+
+The adapter maps Stripe webhook events to VaultSaaS event types:
+
+| Stripe Event | VaultSaaS Event |
+|--------------|----------------|
+| `payment_intent.succeeded` | `payment.completed` |
+| `payment_intent.payment_failed` | `payment.failed` |
+| `payment_intent.processing` | `payment.pending` |
+| `payment_intent.requires_action` | `payment.requires_action` |
+| `charge.refunded` | `payment.refunded` |
+| `charge.dispute.created` | `payment.disputed` |
+| `charge.dispute.closed` | `payment.dispute_resolved` |
+| `payout.paid` | `payout.completed` |
+| `payout.failed` | `payout.failed` |
+
+## Webhook Verification
+
+Stripe webhooks are verified using HMAC-SHA256 signatures with timestamp validation:
+
+- Signature header: `stripe-signature`
+- Timestamp tolerance: 5 minutes
+- Signature format: `t={timestamp},v1={signature}`
+
+```typescript
+await stripe.handleWebhook(
+  request.body,
+  request.headers
+);
+```
+
+<Warning>
+  Webhook verification requires `webhookSecret` to be configured in the adapter constructor. Without it, `handleWebhook()` will throw a `WebhookVerificationError`.
+</Warning>
+
+## Status Mapping
+
+Stripe Payment Intent statuses are mapped to VaultSaaS statuses:
+
+| Stripe Status | VaultSaaS Status |
+|--------------|------------------|
+| `succeeded` | `completed` |
+| `requires_capture` | `authorized` |
+| `requires_action` | `requires_action` |
+| `processing` | `pending` |
+| `canceled` | `cancelled` |
+| `requires_payment_method` | `declined` |
+| `requires_confirmation` | `pending` |
+| Other | `failed` |
+
+## Error Handling
+
+The adapter enriches errors with Stripe-specific context:
+
+```typescript
+{
+  code: 'PROVIDER_ERROR',
+  hint: {
+    providerCode: 'card_declined',
+    providerMessage: 'Your card was declined.',
+    declineCode: 'insufficient_funds',
+    raw: { /* original Stripe error */ }
+  },
+  operation: 'charge'
+}
+```
+
+## Provider Metadata
+
+Payment results include Stripe-specific metadata:
+
+```typescript
+{
+  providerMetadata: {
+    stripeStatus: 'succeeded',
+    paymentMethod: 'pm_1234567890'
+  }
+}
+```
+
+## Usage Example
+
+```typescript
+import { StripeAdapter } from '@vaultsaas/sdk';
+
+const stripe = new StripeAdapter({
+  apiKey: process.env.STRIPE_SECRET_KEY,
+  webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+});
+
+// Direct charge
+const result = await stripe.charge({
+  amount: 5000, // $50.00 in cents
+  currency: 'USD',
+  paymentMethod: {
+    type: 'card',
+    token: 'pm_1234567890',
+  },
+  customer: {
+    email: 'customer@example.com',
+    name: 'John Doe',
+  },
+  description: 'Order #12345',
+});
+
+console.log(result.status); // 'completed'
+console.log(result.providerId); // 'ch_3Abc123...'
+```
+
+## Related Documentation
+
+- [PaymentAdapter Interface](/api/adapters/payment-adapter)
+- [VaultClient](/api/vault-client)
+- [Error Handling](/api/types/errors)

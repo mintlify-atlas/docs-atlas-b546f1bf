@@ -1,0 +1,222 @@
+---
+title: 'void()'
+description: 'Cancel an authorized transaction before capture'
+icon: 'xmark'
+---
+
+Cancel (void) an authorized transaction before it is captured. This releases the hold on funds without charging the customer. Voiding is only applicable to authorizations, not to completed charges.
+
+## Method signature
+
+```typescript
+async void(request: VoidRequest): Promise<VoidResult>
+```
+
+## Parameters
+
+<ParamField path="body.transactionId" type="string" required>
+  The transaction ID of the authorization to void.
+</ParamField>
+
+<ParamField path="body.idempotencyKey" type="string">
+  Unique key to prevent duplicate void operations when retrying the same request.
+</ParamField>
+
+## Returns
+
+<ResponseField name="VoidResult" type="object">
+  Normalized void result containing cancellation details.
+  
+  <Expandable title="properties" defaultOpen>
+    <ResponseField name="id" type="string" required>
+      Unique identifier for the void operation.
+    </ResponseField>
+    
+    <ResponseField name="transactionId" type="string" required>
+      The original authorized transaction that was voided.
+    </ResponseField>
+    
+    <ResponseField name="status" type="string" required>
+      Void status: `"completed"` or `"failed"`.
+    </ResponseField>
+    
+    <ResponseField name="provider" type="string" required>
+      Name of the provider that processed the void operation (same as original authorization).
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="string" required>
+      ISO 8601 timestamp when the void was created.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Error handling
+
+The `void()` method may throw the following errors:
+
+<AccordionGroup>
+  <Accordion title="VaultIdempotencyConflictError">
+    Thrown when an idempotency key is reused with different request data.
+  </Accordion>
+  
+  <Accordion title="VaultRoutingError">
+    Thrown when the provider for the original transaction cannot be found.
+  </Accordion>
+  
+  <Accordion title="Provider-specific errors">
+    The provider may return errors such as:
+    - Authorization not found
+    - Authorization already captured (cannot void a completed charge)
+    - Authorization already voided
+    - Authorization expired
+  </Accordion>
+</AccordionGroup>
+
+## Example
+
+<CodeGroup>
+
+```typescript Cancel hotel reservation
+// Create authorization for hotel reservation
+const authorization = await client.authorize({
+  amount: 50000,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'tok_visa' },
+  description: 'Hotel reservation - Room 305',
+  idempotencyKey: 'auth-reservation-789'
+});
+
+console.log(authorization.status); // 'authorized'
+
+// Customer cancels reservation
+const voidResult = await client.void({
+  transactionId: authorization.id,
+  idempotencyKey: 'void-reservation-789'
+});
+
+console.log(voidResult.status); // 'completed'
+// Hold is released, customer is not charged
+```
+
+```typescript Cancel car rental deposit
+const authorization = await client.authorize({
+  amount: 100000, // $1000 deposit
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'tok_visa' },
+  description: 'Car rental deposit'
+});
+
+// Car returned without damage, release deposit
+const voidResult = await client.void({
+  transactionId: authorization.id
+});
+
+console.log(voidResult.status); // 'completed'
+```
+
+```typescript With error handling
+try {
+  const voidResult = await client.void({
+    transactionId: 'txn_auth_xyz',
+    idempotencyKey: 'void-auth-xyz'
+  });
+  
+  console.log('Authorization voided successfully');
+} catch (error) {
+  if (error.message.includes('already captured')) {
+    console.error('Cannot void: transaction already captured');
+    // Use refund() instead for captured transactions
+    const refund = await client.refund({
+      transactionId: 'txn_auth_xyz'
+    });
+  } else if (error.message.includes('expired')) {
+    console.error('Authorization expired, hold already released');
+  } else {
+    console.error('Void failed:', error.message);
+  }
+}
+```
+
+```typescript Timeout handling
+// Void authorization if not captured within 24 hours
+const authorization = await client.authorize({
+  amount: 30000,
+  currency: 'USD',
+  paymentMethod: { type: 'card', token: 'tok_visa' }
+});
+
+// Set up timeout to automatically void
+setTimeout(async () => {
+  try {
+    await client.void({
+      transactionId: authorization.id
+    });
+    console.log('Authorization automatically voided after timeout');
+  } catch (error) {
+    // May already be captured or voided
+    console.log('Auto-void failed:', error.message);
+  }
+}, 24 * 60 * 60 * 1000); // 24 hours
+```
+
+</CodeGroup>
+
+## Implementation details
+
+The void operation (`src/client/vault-client.ts:274-295`):
+
+1. Looks up the provider that handled the original authorization using the transaction index
+2. Executes the void operation through the provider adapter
+3. Returns a `VoidResult` with minimal details (void operations don't have amounts)
+4. Queues transaction report to the platform with amount set to 0
+
+<Info>
+  Void operations are processed through the same provider that handled the original authorization. The operation is immediate and releases the hold on funds.
+</Info>
+
+<Warning>
+  You can only void authorizations that have not been captured yet. For completed charges, use `refund()` instead.
+</Warning>
+
+## When to use void vs refund
+
+<Columns cols={2}>
+  <Card title="Use void()" icon="xmark">
+    - Transaction is authorized but not captured
+    - Customer cancels before service/delivery
+    - Want to release hold immediately
+    - No funds have been transferred
+  </Card>
+  
+  <Card title="Use refund()" icon="arrow-rotate-left">
+    - Transaction is already captured/charged
+    - Customer returns product after delivery
+    - Need to return funds to customer
+    - Funds have been transferred
+  </Card>
+</Columns>
+
+<Tip>
+  Implement automatic voiding for authorizations that are not captured within a certain timeframe to ensure customers aren't left with unnecessary holds on their cards.
+</Tip>
+
+## Authorization lifecycle
+
+<Steps>
+  <Step title="Authorization created">
+    Status is `"authorized"` and funds are on hold.
+  </Step>
+  
+  <Step title="Decision point">
+    You can either:
+    - Call `capture()` to complete the charge
+    - Call `void()` to cancel and release the hold
+    - Wait for automatic expiration (typically 7 days)
+  </Step>
+  
+  <Step title="Final state">
+    - If captured: status becomes `"completed"`, funds are transferred
+    - If voided: status becomes `"cancelled"`, hold is released
+    - If expired: hold is automatically released
+  </Step>
+</Steps>
